@@ -17,11 +17,17 @@ classifiers = [
 ]
 dependencies = [
     "loguru",
+    "matplotlib>=3.10.7",
+    "pandas>=2.3.3",
     "pip",
+    "pre-commit>=4.3.0",
     "python-dotenv",
     "ruff",
+    "scikit-learn>=1.7.2",
+    "seaborn>=0.13.2",
     "tqdm",
     "typer",
+    "wandb>=0.22.2",
 ]
 requires-python = "~=3.13.0"
 
