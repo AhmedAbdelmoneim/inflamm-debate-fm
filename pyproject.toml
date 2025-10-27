@@ -1,0 +1,40 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "inflamm_debate_fm"
+version = "0.0.1"
+description = "Revisiting the mouse-human inflammation response debate using foundation models"
+authors = [
+  { name = "Ahmed Sallam" },
+]
+
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    
+]
+dependencies = [
+    "loguru",
+    "pip",
+    "python-dotenv",
+    "ruff",
+    "tqdm",
+    "typer",
+]
+requires-python = "~=3.13.0"
+
+
+[tool.ruff]
+line-length = 99
+src = ["inflamm_debate_fm"]
+include = ["pyproject.toml", "inflamm_debate_fm/**/*.py"]
+
+[tool.ruff.lint]
+extend-select = ["I"]  # Add import sorting
+
+[tool.ruff.lint.isort]
+known-first-party = ["inflamm_debate_fm"]
+force-sort-within-sections = true
+
