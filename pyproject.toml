@@ -16,6 +16,7 @@ classifiers = [
     
 ]
 dependencies = [
+    "ipykernel>=7.1.0",
     "loguru",
     "matplotlib>=3.10.7",
     "pandas>=2.3.3",
@@ -23,6 +24,7 @@ dependencies = [
     "pre-commit>=4.3.0",
     "python-dotenv",
     "ruff",
+    "scanpy>=1.11.5",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
     "tqdm",
