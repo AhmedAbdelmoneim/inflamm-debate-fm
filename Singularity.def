@@ -1,0 +1,45 @@
+Bootstrap: docker
+From: python:3.13-slim
+
+%files
+    pyproject.toml /opt/inflamm-debate-fm/
+    README.md /opt/inflamm-debate-fm/
+    inflamm_debate_fm /opt/inflamm-debate-fm/inflamm_debate_fm
+
+%post
+    # Update package lists
+    apt-get update && apt-get install -y \
+        build-essential \
+        git \
+        curl \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install uv
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.cargo/bin:$PATH"
+
+    # Set working directory
+    cd /opt/inflamm-debate-fm
+
+    # Install dependencies and package using uv
+    /root/.cargo/bin/uv pip install --system -e .
+
+    # Create data and model directories
+    mkdir -p /opt/inflamm-debate-fm/data
+    mkdir -p /opt/inflamm-debate-fm/models
+    mkdir -p /opt/inflamm-debate-fm/reports
+
+%environment
+    export PATH="/root/.cargo/bin:$PATH"
+    export PYTHONPATH="/opt/inflamm-debate-fm:$PYTHONPATH"
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    # Default command
+    exec python -m inflamm_debate_fm.cli "$@"
+
+%labels
+    Author "Ahmed Sallam"
+    Version "0.0.1"
+    Description "inflamm-debate-fm: Revisiting the mouse-human inflammation response debate using foundation models"
+

@@ -1,0 +1,76 @@
+# Default configuration for inflamm-debate-fm
+
+[time_cutoffs]
+human_acute_cutoff_hours = 24
+human_subacute_cutoff_hours = 168  # 7 days
+mouse_acute_cutoff_hours = 12
+mouse_subacute_cutoff_hours = 55
+
+[model]
+random_seed = 42
+cv_folds = 10
+n_bootstraps = 20
+
+[model.linear]
+solver = "liblinear"
+max_iter = 5000
+penalty = "l2"
+random_state = 21
+
+[model.nonlinear]
+kernel = "rbf"
+C = 1.0
+gamma = "scale"
+probability = true
+random_state = 21
+
+[embedding]
+model_name = "bulkformer"
+batch_size = 32
+device = "cpu"
+# Embedding flavor can be specified at runtime
+# Supported flavors: default, normalized, etc.
+
+[analysis]
+gsea_fdr_threshold = 0.05
+top_k_genes = 15
+figure_dpi = 300
+figure_figsize = [10, 8]
+
+[paths]
+# Paths can be overridden via environment variables
+# Data paths are relative to DATA_DIR from config.py
+ann_data_dir = "processed/anndata_orthologs"
+embeddings_dir = "processed/bulkformer_embeddings"
+combined_data_dir = "processed/anndata_combined"
+model_coefficients_dir = "model_coefficients"
+gsea_results_dir = "gsea"
+post_analysis_dir = "post_analysis"
+
+[hpc]
+# Resource specifications for Flyte tasks
+[cpu_task]
+cpu = "2"
+memory = "4Gi"
+storage = "10Gi"
+timeout = "1h"
+
+[gpu_task]
+cpu = "4"
+memory = "16Gi"
+gpu = "1"
+storage = "20Gi"
+timeout = "4h"
+
+[embedding_task]
+cpu = "8"
+memory = "32Gi"
+gpu = "1"
+storage = "50Gi"
+timeout = "8h"
+
+[wandb]
+project = "inflamm-debate-fm"
+entity = null  # Set via environment variable WANDB_ENTITY if needed
+tags = ["research", "inflammation"]
+
