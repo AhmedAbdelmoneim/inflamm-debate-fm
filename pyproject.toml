@@ -16,18 +16,24 @@ classifiers = [
     
 ]
 dependencies = [
+    "gseapy>=1.1.10",
+    "ipykernel>=7.1.0",
     "loguru",
     "matplotlib>=3.10.7",
+    "mygene>=3.2.2",
     "pandas>=2.3.3",
     "pip",
     "pre-commit>=4.3.0",
     "python-dotenv",
     "ruff",
+    "scanpy>=1.11.5",
+    "scikit-dimension>=0.3.4",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
     "tqdm",
     "typer",
     "wandb>=0.22.2",
+    "xgboost>=3.1.1",
 ]
 requires-python = "~=3.13.0"
 

@@ -1,9 +1,5 @@
 # inflamm-debate-fm
 
-<a target="_blank" href="https://cookiecutter-data-science.drivendata.org/">
-    <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
-</a>
-
 Revisiting the mouse-human inflammation response debate using foundation models
 
 ## Project Organization
@@ -58,4 +54,3 @@ Revisiting the mouse-human inflammation response debate using foundation models
 ```
 
 --------
-
