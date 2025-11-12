@@ -31,8 +31,8 @@ except ImportError as e:
 
 
 def load_bulkformer_model(
-    model_dir: Optional[Path] = None,
-    data_dir: Optional[Path] = None,
+    model_dir: Path | None = None,
+    data_dir: Path | None = None,
     device: str = "cpu",
 ) -> torch.nn.Module:
     """Load BulkFormer model.

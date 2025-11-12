@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from loguru import logger
 
 try:
@@ -15,10 +16,56 @@ except ImportError:
 # config/config.py is at inflamm_debate_fm/config/config.py
 # PROJ_ROOT is two levels up from config/config.py
 PROJ_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJ_ROOT / "data"
-MODELS_DIR = PROJ_ROOT / "models"
+
+# Load environment variables from .env file if it exists
+# Load from project root directory
+env_path = PROJ_ROOT / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path, override=False)
+    logger.debug(f"Loaded environment variables from {env_path}")
+else:
+    # Also try loading from current directory (backward compatibility)
+    # Use override=False to respect existing environment variables
+    load_dotenv(override=False)
+
+# Use environment variables if set, otherwise use defaults
+# DATA_ROOT and MODELS_ROOT are configurable via environment variables
+# This allows storing large data files in a different location (e.g., on HPC)
+DATA_ROOT = Path(os.environ.get("INFLAMM_DEBATE_FM_DATA_ROOT", PROJ_ROOT / "data"))
+MODELS_ROOT = Path(os.environ.get("INFLAMM_DEBATE_FM_MODELS_ROOT", PROJ_ROOT / "models"))
+
+logger.info(f"PROJ_ROOT path is: {PROJ_ROOT}")
+logger.info(f"DATA_ROOT path is: {DATA_ROOT}")
+logger.info(f"MODELS_ROOT path is: {MODELS_ROOT}")
+
+# DATA_DIR is the same as DATA_ROOT (for backward compatibility)
+DATA_DIR = DATA_ROOT
+MODELS_DIR = MODELS_ROOT
+
+# Internal data structure (relative to DATA_ROOT)
+RAW_DATA_DIR = DATA_DIR / "raw"
+INTERIM_DATA_DIR = DATA_DIR / "interim"
+PROCESSED_DATA_DIR = DATA_DIR / "processed"
+EXTERNAL_DATA_DIR = DATA_DIR / "external"
+GEO_DOWNLOAD_DIR = DATA_DIR / "raw" / "geo_downloads"
+
+# BulkFormer directories (relative to MODELS_ROOT)
+BULKFORMER_MODEL_DIR = MODELS_DIR / "BulkFormer" / "model"
+BULKFORMER_DATA_DIR = MODELS_DIR / "BulkFormer" / "data"
+
+# Other directories (usually in project root)
 REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
+
+# Configure loguru to work with tqdm if available
+# https://github.com/Delgan/loguru/issues/135
+try:
+    from tqdm import tqdm
+
+    logger.remove(0)
+    logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
+except ModuleNotFoundError:
+    pass
 
 # Path to default config file
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "default.toml"
@@ -35,6 +82,9 @@ def load_config(config_path: Path | str | None = None) -> dict[str, Any]:
 
     Returns:
         Configuration dictionary.
+
+    Raises:
+        FileNotFoundError: If config file does not exist.
     """
     global _config_cache
 
@@ -84,7 +134,7 @@ def get_config() -> dict[str, Any]:
     """Get cached configuration or load default.
 
     Returns:
-        Configuration dictionary.
+        Configuration dictionary. If cache is empty, loads default config.
     """
     if _config_cache is None:
         return load_config()

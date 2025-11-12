@@ -1,7 +1,6 @@
 """GEO data preprocessing functions for inflammation datasets."""
 
 from pathlib import Path
-from typing import Dict, Optional
 
 import anndata as ad
 import GEOparse
@@ -211,7 +210,7 @@ def process_gse_dataset(
     geo_download_dir: Path,
     output_dir: Path,
     species: str = "human",
-    phenotype_columns: Optional[Dict[str, str]] = None,
+    phenotype_columns: dict[str, str] | None = None,
 ) -> ad.AnnData:
     """Download and process a GSE dataset into an AnnData object.
 

@@ -1,14 +1,17 @@
 """Functions for generating embeddings from transcriptome data."""
 
 from pathlib import Path
-from typing import Dict, Optional
 
 import anndata as ad
 from loguru import logger
 import numpy as np
 
-from inflamm_debate_fm.config import BULKFORMER_DATA_DIR, BULKFORMER_MODEL_DIR, DATA_DIR
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import (
+    BULKFORMER_DATA_DIR,
+    BULKFORMER_MODEL_DIR,
+    DATA_DIR,
+    get_config,
+)
 
 
 def generate_embeddings(
@@ -18,8 +21,8 @@ def generate_embeddings(
     batch_size: int = 32,
     device: str = "cpu",
     output_dir: Path | str | None = None,
-    model_dir: Optional[Path] = None,
-    data_dir: Optional[Path] = None,
+    model_dir: Path | None = None,
+    data_dir: Path | None = None,
     aggregate_type: str = "max",
 ) -> np.ndarray:
     """Generate embeddings for an AnnData object.
@@ -102,13 +105,13 @@ def generate_embeddings(
 
 
 def generate_embeddings_for_datasets(
-    adatas: Dict[str, ad.AnnData],
+    adatas: dict[str, ad.AnnData],
     model_name: str = "bulkformer",
     flavor: str = "default",
     batch_size: int = 32,
     device: str = "cpu",
     output_dir: Path | str | None = None,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """Generate embeddings for multiple datasets.
 
     Args:

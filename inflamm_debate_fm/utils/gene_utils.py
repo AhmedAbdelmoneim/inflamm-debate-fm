@@ -1,9 +1,7 @@
 """Gene name utilities."""
 
-from typing import List
 
-
-def deduplicate_names(names: List[str]) -> List[str]:
+def deduplicate_names(names: list[str]) -> list[str]:
     """Deduplicate gene names by appending numbers.
 
     Args:

@@ -5,8 +5,7 @@ from pathlib import Path
 from loguru import logger
 import typer
 
-from inflamm_debate_fm.config import DATA_DIR
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import DATA_DIR, get_config
 from inflamm_debate_fm.data.load import combine_adatas, load_adatas
 from inflamm_debate_fm.data.preprocessing import preprocess_all_datasets
 

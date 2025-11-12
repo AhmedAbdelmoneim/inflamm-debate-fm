@@ -146,12 +146,16 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Keep .env.example in version control
+!.env.example
 
 # Spyder project settings
 .spyderproject

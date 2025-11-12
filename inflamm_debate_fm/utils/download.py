@@ -1,7 +1,6 @@
 """Download utilities for data and models."""
 
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 import requests
@@ -75,7 +74,7 @@ def download_file(url: str, dest_path: Path, chunk_size: int = 8192) -> None:
 def download_from_zenodo(
     file_name: str,
     dest_dir: Path,
-    record_id: Optional[str] = None,
+    record_id: str | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Download a file from Zenodo.
@@ -119,7 +118,7 @@ def download_bulkformer_models(
     model_dir: Path,
     data_dir: Path,
     overwrite: bool = False,
-    record_id: Optional[str] = None,
+    record_id: str | None = None,
 ) -> None:
     """Download BulkFormer model files from Zenodo.
 

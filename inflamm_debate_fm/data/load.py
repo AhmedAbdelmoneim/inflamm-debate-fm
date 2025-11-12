@@ -2,21 +2,19 @@
 
 import os
 from pathlib import Path
-from typing import Dict
 
 import anndata as ad
 from loguru import logger
 import numpy as np
 
-from inflamm_debate_fm.config import DATA_DIR
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import DATA_DIR, get_config
 
 
 def load_adatas(
     ann_data_dir: Path | str | None = None,
     embeddings_dir: Path | str | None = None,
     load_embeddings: bool = True,
-) -> Dict[str, ad.AnnData]:
+) -> dict[str, ad.AnnData]:
     """Load AnnData files and optionally add embeddings.
 
     Args:
@@ -64,7 +62,7 @@ def load_adatas(
 
 def load_combined_adatas(
     combined_data_dir: Path | str | None = None,
-) -> Dict[str, ad.AnnData]:
+) -> dict[str, ad.AnnData]:
     """Load combined human and mouse AnnData files.
 
     Args:
@@ -131,7 +129,7 @@ def load_embedding(
     return np.load(embedding_path)
 
 
-def combine_adatas(adatas: Dict[str, ad.AnnData], species_prefix: str) -> ad.AnnData:
+def combine_adatas(adatas: dict[str, ad.AnnData], species_prefix: str) -> ad.AnnData:
     """Combine AnnData objects for a given species.
 
     Args:

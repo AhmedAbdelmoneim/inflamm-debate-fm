@@ -1,17 +1,13 @@
 """Inflammation vector calculation and bootstrapping."""
 
-from typing import Optional
-
 from loguru import logger
 import numpy as np
 from sklearn.utils import resample
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 
 
-def calculate_inflammation_vector(
-    embeddings: np.ndarray, labels: np.ndarray
-) -> Optional[np.ndarray]:
+def calculate_inflammation_vector(embeddings: np.ndarray, labels: np.ndarray) -> np.ndarray | None:
     """Calculate the mean(inflamed) - mean(control) vector.
 
     Args:
@@ -39,7 +35,7 @@ def bootstrap_vector(
     embeddings: np.ndarray,
     labels: np.ndarray,
     n_bootstraps: int = 20,
-) -> tuple[Optional[np.ndarray], list[float]]:
+) -> tuple[np.ndarray | None, list[float]]:
     """Generate bootstrapped inflammation vectors and calculate similarities.
 
     Args:

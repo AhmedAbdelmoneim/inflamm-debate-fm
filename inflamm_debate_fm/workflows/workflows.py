@@ -9,11 +9,10 @@ to run the pipeline on a Flyte cluster.
 """
 
 from pathlib import Path
-from typing import Dict
 
 from flytekit import Resources, task, workflow
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 
 
 # Resource specifications from config
@@ -299,7 +298,7 @@ def probing_workflow(
     cross_species_output_dir: str,
     n_cv_folds: int = 10,
     use_wandb: bool = True,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Flyte workflow for probing experiments.
 
     Args:
@@ -347,7 +346,7 @@ def analysis_workflow(
     coeff_dir: str,
     gsea_output_dir: str,
     use_wandb: bool = True,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Flyte workflow for analysis (coefficients and GSEA).
 
     Args:
@@ -388,7 +387,7 @@ def full_pipeline_workflow(
     load_embeddings: bool = True,
     n_cv_folds: int = 10,
     use_wandb: bool = True,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Full pipeline workflow orchestrating all stages.
 
     Args:

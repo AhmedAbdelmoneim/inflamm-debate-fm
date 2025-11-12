@@ -1,13 +1,12 @@
 """Gene Set Enrichment Analysis (GSEA) functions."""
 
 from pathlib import Path
-from typing import Dict
 
 import gseapy as gp
 from loguru import logger
 import pandas as pd
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 
 
 def run_prerank_from_coef_df(
@@ -17,7 +16,7 @@ def run_prerank_from_coef_df(
     min_size: int = 15,
     max_size: int = 500,
     permutation_num: int = 1000,
-) -> Dict:
+) -> dict:
     """Run prerank GSEA from coefficient DataFrame.
 
     Args:

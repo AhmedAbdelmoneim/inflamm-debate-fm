@@ -1,9 +1,10 @@
 """Coefficient extraction and analysis for gene expression models."""
 
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 import re
-from typing import Dict, List, Tuple
+from typing import Dict
 
 import anndata as ad
 from loguru import logger
@@ -17,9 +18,9 @@ from inflamm_debate_fm.modeling.pipelines import get_linear_pipeline_raw_only
 def evaluate_linear_models(
     human_adata: ad.AnnData,
     mouse_adata: ad.AnnData,
-    setups: List[Tuple[str, callable]],
+    setups: list[tuple[str, Callable[[ad.AnnData], tuple]]],
     output_dir: str | Path = "model_coefficients",
-) -> Tuple[Dict, Dict]:
+) -> tuple[dict, dict]:
     """Train and evaluate linear models on Raw gene expression data.
 
     Save standardized coefficients for downstream gene functional analysis.
@@ -103,7 +104,7 @@ def evaluate_linear_models(
 
 def load_all_coefficients(
     coeff_dir: str | Path = "model_coefficients", gene_col: str = "gene", coef_col: str = "coef"
-) -> Dict[str, Dict[str, pd.DataFrame]]:
+) -> dict[str, dict[str, pd.DataFrame]]:
     """Load coefficient CSVs from directory.
 
     Args:
@@ -159,8 +160,8 @@ def load_all_coefficients(
 
 
 def normalize_coefficients(
-    all_coefs: Dict[str, Dict[str, pd.DataFrame]],
-) -> Dict[str, Dict[str, pd.DataFrame]]:
+    all_coefs: dict[str, dict[str, pd.DataFrame]],
+) -> dict[str, dict[str, pd.DataFrame]]:
     """Normalize coefficients within each setup/direction.
 
     Args:

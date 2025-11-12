@@ -1,15 +1,13 @@
 """Data preprocessing functions."""
 
-from typing import Dict
-
 import anndata as ad
 from loguru import logger
 import pandas as pd
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 
 
-def fill_and_transform_infl_categories(adatas: Dict[str, ad.AnnData]) -> None:
+def fill_and_transform_infl_categories(adatas: dict[str, ad.AnnData]) -> None:
     """Fill and transform inflammation categories for all adatas.
 
     Args:
@@ -245,7 +243,7 @@ def preprocess_mouse_infection(
     )
 
 
-def preprocess_all_datasets(adatas: Dict[str, ad.AnnData]) -> None:
+def preprocess_all_datasets(adatas: dict[str, ad.AnnData]) -> None:
     """Preprocess all datasets with timepoint categorization.
 
     Args:

@@ -103,6 +103,16 @@ source .venv/bin/activate  # Unix/macOS
 .venv\Scripts\activate  # Windows
 ```
 
+4. (Optional) Configure environment variables:
+```bash
+# Copy the example .env file
+cp .env.example .env
+
+# Edit .env and set your paths (e.g., for HPC with separate storage)
+# INFLAMM_DEBATE_FM_DATA_ROOT=/path/to/large/data/directory
+# INFLAMM_DEBATE_FM_MODELS_ROOT=/path/to/models/directory
+```
+
 ### Compute Canada HPC Setup
 
 1. Load required modules:
@@ -142,11 +152,38 @@ Configuration is managed through TOML files. The default configuration is in `in
 - **`[paths]`**: Directory paths for data and outputs
 - **`[wandb]`**: Wandb configuration for experiment tracking
 
-### Environment Variable Overrides
+### Environment Variable Configuration
 
-You can override configuration paths using environment variables:
+You can configure environment variables using a `.env` file in the project root directory. This is the recommended approach as it avoids needing to export variables every time.
 
-**Data and Model Directories:**
+#### Using a .env File (Recommended)
+
+1. Copy the example file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and set your values:
+   ```bash
+   # Data directory configuration
+   INFLAMM_DEBATE_FM_DATA_ROOT=/path/to/large/data/directory
+   
+   # Models directory configuration
+   INFLAMM_DEBATE_FM_MODELS_ROOT=/path/to/models/directory
+   
+   # Wandb configuration (optional)
+   WANDB_ENTITY=your-entity-name
+   WANDB_API_KEY=your-api-key
+   ```
+
+3. The `.env` file is automatically loaded when you run the CLI or import the package.
+
+**Note:** The `.env` file is git-ignored, so your local configuration won't be committed to the repository.
+
+#### Using Shell Environment Variables (Alternative)
+
+You can also set environment variables in your shell:
+
 ```bash
 # Set custom data root directory (for large files, e.g., on HPC)
 export INFLAMM_DEBATE_FM_DATA_ROOT="/path/to/large/data/directory"
@@ -159,11 +196,30 @@ export INFLAMM_DEBATE_FM_ANN_DATA_DIR="/path/to/anndata"
 export INFLAMM_DEBATE_FM_EMBEDDINGS_DIR="/path/to/embeddings"
 ```
 
+#### Available Environment Variables
+
+- **`INFLAMM_DEBATE_FM_DATA_ROOT`**: Root directory for data files (defaults to `<project_root>/data`)
+- **`INFLAMM_DEBATE_FM_MODELS_ROOT`**: Root directory for model files (defaults to `<project_root>/models`)
+- **`INFLAMM_DEBATE_FM_ANN_DATA_DIR`**: Directory for AnnData files
+- **`INFLAMM_DEBATE_FM_EMBEDDINGS_DIR`**: Directory for embeddings
+- **`INFLAMM_DEBATE_FM_COMBINED_DATA_DIR`**: Directory for combined data
+- **`WANDB_ENTITY`**: Wandb entity name (optional)
+- **`WANDB_API_KEY`**: Wandb API key (optional)
+
 **Note:** When setting `DATA_ROOT` or `MODELS_ROOT`, the internal subfolder structure remains the same, but the root location can be changed. This is useful for storing large data files on HPC systems with separate storage volumes.
 
 ### Wandb Configuration
 
-Set your Wandb entity (optional):
+Wandb can be configured via the `.env` file (recommended) or environment variables:
+
+**Using .env file (Recommended):**
+```bash
+# Add to .env file
+WANDB_ENTITY=your-entity-name
+WANDB_API_KEY=your-api-key
+```
+
+**Using environment variables:**
 ```bash
 export WANDB_ENTITY="your-entity-name"
 export WANDB_API_KEY="your-api-key"

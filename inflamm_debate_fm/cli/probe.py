@@ -1,61 +1,34 @@
-"""Model training and evaluation entry point."""
+"""Probing experiment commands."""
 
 from pathlib import Path
 import pickle
-from typing import List, Optional
 
 from loguru import logger
 import typer
 
+from inflamm_debate_fm.cli.utils import get_setup_transforms
 from inflamm_debate_fm.config import DATA_DIR, get_config
 from inflamm_debate_fm.data.load import load_combined_adatas
-from inflamm_debate_fm.data.transforms import (
-    transform_adata_to_X_y_acute,
-    transform_adata_to_X_y_acute_and_subacute,
-    transform_adata_to_X_y_acute_subacute_to_chronic,
-    transform_adata_to_X_y_acute_to_chronic,
-    transform_adata_to_X_y_all,
-    transform_adata_to_X_y_chronic,
-    transform_adata_to_X_y_subacute,
-    transform_adata_to_X_y_takao,
-)
 from inflamm_debate_fm.modeling.evaluation import (
     evaluate_cross_species,
     evaluate_within_species,
 )
 from inflamm_debate_fm.utils.wandb_utils import init_wandb
 
-app = typer.Typer()
+app = typer.Typer(help="Probing experiment commands")
 
 
-def get_setup_transforms():
-    """Get all setup transform functions."""
-    return [
-        ("All Inflammation Samples vs. Control", transform_adata_to_X_y_all),
-        ("Takao Subset for Inflammation vs. Control", transform_adata_to_X_y_takao),
-        ("Acute Inflammation vs. Control", transform_adata_to_X_y_acute),
-        ("Subacute Inflammation vs. Control", transform_adata_to_X_y_subacute),
-        ("Acute and Subacute Inflammation vs. Control", transform_adata_to_X_y_acute_and_subacute),
-        ("Chronic Inflammation vs. Control", transform_adata_to_X_y_chronic),
-        ("Acute Inflammation vs. Chronic Inflammation", transform_adata_to_X_y_acute_to_chronic),
-        (
-            "Acute/Subacute Inflammation vs. Chronic Inflammation",
-            transform_adata_to_X_y_acute_subacute_to_chronic,
-        ),
-    ]
-
-
-@app.command()
-def within_species(
+@app.command("within-species")
+def probe_within_species(
     species: str = typer.Option(..., help="Species: 'human' or 'mouse'"),
     combined_data_dir: Path | None = None,
     output_dir: Path | None = None,
     n_cv_folds: int = 10,
-    use_wandb: bool = True,
+    use_wandb: bool = False,
     wandb_project: str | None = None,
     wandb_entity: str | None = None,
     wandb_tags: list[str] | None = None,
-):
+) -> None:
     """Run within-species probing experiments.
 
     Args:
@@ -126,15 +99,15 @@ def within_species(
         wandb_run.finish()
 
 
-@app.command()
-def cross_species(
-    combined_data_dir: Optional[Path] = None,
-    output_dir: Optional[Path] = None,
-    use_wandb: bool = True,
-    wandb_project: Optional[str] = None,
-    wandb_entity: Optional[str] = None,
-    wandb_tags: Optional[List[str]] = None,
-):
+@app.command("cross-species")
+def probe_cross_species(
+    combined_data_dir: Path | None = None,
+    output_dir: Path | None = None,
+    use_wandb: bool = False,
+    wandb_project: str | None = None,
+    wandb_entity: str | None = None,
+    wandb_tags: list[str] | None = None,
+) -> None:
     """Run cross-species probing experiments.
 
     Args:
@@ -197,7 +170,3 @@ def cross_species(
 
     if wandb_run:
         wandb_run.finish()
-
-
-if __name__ == "__main__":
-    app()
