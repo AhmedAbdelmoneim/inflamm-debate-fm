@@ -16,11 +16,14 @@ classifiers = [
     
 ]
 dependencies = [
+    "anndata>=0.10.0",
+    "flytekit>=1.10.0",
     "gseapy>=1.1.10",
     "ipykernel>=7.1.0",
     "loguru",
     "matplotlib>=3.10.7",
     "mygene>=3.2.2",
+    "numpy>=1.24.0",
     "pandas>=2.3.3",
     "pip",
     "pre-commit>=4.3.0",
@@ -30,6 +33,7 @@ dependencies = [
     "scikit-dimension>=0.3.4",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
+    "tomli>=2.0.0; python_version < '3.11'",
     "tqdm",
     "typer",
     "wandb>=0.22.2",
