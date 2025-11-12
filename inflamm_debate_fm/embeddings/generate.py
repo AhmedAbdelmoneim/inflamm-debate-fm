@@ -1,13 +1,13 @@
 """Functions for generating embeddings from transcriptome data."""
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import anndata as ad
 from loguru import logger
 import numpy as np
 
-from inflamm_debate_fm.config import DATA_DIR
+from inflamm_debate_fm.config import BULKFORMER_DATA_DIR, BULKFORMER_MODEL_DIR, DATA_DIR
 from inflamm_debate_fm.config.config import get_config
 
 
@@ -18,13 +18,11 @@ def generate_embeddings(
     batch_size: int = 32,
     device: str = "cpu",
     output_dir: Path | str | None = None,
+    model_dir: Optional[Path] = None,
+    data_dir: Optional[Path] = None,
+    aggregate_type: str = "max",
 ) -> np.ndarray:
     """Generate embeddings for an AnnData object.
-
-    This is a placeholder function. In practice, this would:
-    1. Load the embedding model (e.g., bulkformer)
-    2. Process the transcriptome data (X) through the model
-    3. Return the embeddings
 
     Args:
         adata: AnnData object with transcriptome data in .X.
@@ -33,12 +31,15 @@ def generate_embeddings(
         batch_size: Batch size for embedding generation.
         device: Device to use ('cpu' or 'cuda').
         output_dir: Directory to save embeddings. If None, uses config default.
+        model_dir: Directory containing model files. If None, uses config default.
+        data_dir: Directory containing data files. If None, uses config default.
+        aggregate_type: Aggregation method for BulkFormer ('max', 'mean', 'median', 'all').
 
     Returns:
         Embedding array of shape (n_samples, n_embedding_dim).
 
     Raises:
-        NotImplementedError: This function is a placeholder and needs to be implemented.
+        ValueError: If model_name is not supported.
     """
     config = get_config()
     embedding_config = config.get("embedding", {})
@@ -48,19 +49,39 @@ def generate_embeddings(
     device = embedding_config.get("device", device)
 
     logger.info(f"Generating {flavor} embeddings for {adata.shape[0]} samples using {model_name}")
-    logger.warning(
-        "generate_embeddings is a placeholder. Implement actual embedding generation logic."
-    )
 
-    # Placeholder: return zeros
-    # In practice, this would:
-    # 1. Load model from checkpoint or hub
-    # 2. Process adata.X through model in batches
-    # 3. Return embeddings
-    n_samples = adata.shape[0]
-    n_dim = 512  # Placeholder dimension
+    if model_name == "bulkformer":
+        from inflamm_debate_fm.bulkformer.generate import generate_bulkformer_embeddings
 
-    embeddings = np.zeros((n_samples, n_dim))
+        # Determine output path
+        output_path = None
+        if output_dir is not None:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            # Output path will be set by the caller typically
+        elif flavor != "default":
+            output_dir = DATA_DIR / config["paths"]["embeddings_dir"] / flavor
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use configurable model and data directories
+        if model_dir is None:
+            model_dir = BULKFORMER_MODEL_DIR
+        if data_dir is None:
+            data_dir = BULKFORMER_DATA_DIR
+
+        embeddings = generate_bulkformer_embeddings(
+            adata=adata,
+            model_dir=model_dir,
+            data_dir=data_dir,
+            device=device,
+            batch_size=batch_size,
+            aggregate_type=aggregate_type,
+            output_path=output_path,
+        )
+    else:
+        raise ValueError(f"Unsupported model_name: {model_name}. Supported: 'bulkformer'")
+
+    embeddings = np.array(embeddings)
 
     # Save embeddings if output_dir is provided
     if output_dir is not None:

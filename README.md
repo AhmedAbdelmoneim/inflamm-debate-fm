@@ -145,10 +145,21 @@ Configuration is managed through TOML files. The default configuration is in `in
 ### Environment Variable Overrides
 
 You can override configuration paths using environment variables:
+
+**Data and Model Directories:**
 ```bash
+# Set custom data root directory (for large files, e.g., on HPC)
+export INFLAMM_DEBATE_FM_DATA_ROOT="/path/to/large/data/directory"
+
+# Set custom models root directory
+export INFLAMM_DEBATE_FM_MODELS_ROOT="/path/to/models/directory"
+
+# Override specific paths
 export INFLAMM_DEBATE_FM_ANN_DATA_DIR="/path/to/anndata"
 export INFLAMM_DEBATE_FM_EMBEDDINGS_DIR="/path/to/embeddings"
 ```
+
+**Note:** When setting `DATA_ROOT` or `MODELS_ROOT`, the internal subfolder structure remains the same, but the root location can be changed. This is useful for storing large data files on HPC systems with separate storage volumes.
 
 ### Wandb Configuration
 
@@ -158,24 +169,47 @@ export WANDB_ENTITY="your-entity-name"
 export WANDB_API_KEY="your-api-key"
 ```
 
-## Usage
+## Quick Start
 
-### Command-Line Interface
-
-The project provides a comprehensive CLI through `inflamm_debate_fm.cli`:
+### 1. Download Required Data and Models
 
 ```bash
-# Preprocess data
-python -m inflamm_debate_fm.cli preprocess all
+# Download all required data and models (BulkFormer models from Zenodo, GEO datasets)
+python -m inflamm_debate_fm.cli download all
 
-# Generate embeddings
-python -m inflamm_debate_fm.cli embed generate <dataset_name> --model-name bulkformer
+# Or download individually:
+# Download BulkFormer models
+python -m inflamm_debate_fm.cli download models
 
+# Download GEO datasets
+python -m inflamm_debate_fm.cli download geo --gse-id GSE37069
+```
+
+### 2. Preprocess GEO Data
+
+```bash
+# Preprocess a GEO dataset into AnnData format
+python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --gse-id GSE37069
+
+# Or use the dataset name (auto-detects GSE ID)
+python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --species human
+```
+
+### 3. Generate Embeddings
+
+```bash
+# Generate BulkFormer embeddings
+python -m inflamm_debate_fm.cli embed generate human_burn --device cuda --batch-size 256
+```
+
+### 4. Run Analysis
+
+```bash
 # Run within-species probing
-python -m inflamm_debate_fm.cli probe within-species --species human --use-wandb
+python -m inflamm_debate_fm.cli probe within-species --species human
 
 # Run cross-species probing
-python -m inflamm_debate_fm.cli probe cross-species --use-wandb
+python -m inflamm_debate_fm.cli probe cross-species
 
 # Analyze coefficients
 python -m inflamm_debate_fm.cli analyze coefficients
@@ -185,6 +219,75 @@ python -m inflamm_debate_fm.cli analyze gsea
 
 # Generate plots
 python -m inflamm_debate_fm.cli plot within-species --species human
+python -m inflamm_debate_fm.cli plot cross-species
+```
+
+## Usage
+
+### Command-Line Interface
+
+The project provides a comprehensive CLI through `inflamm_debate_fm.cli`:
+
+#### Download Commands
+
+```bash
+# Download all required data and models
+python -m inflamm_debate_fm.cli download all
+
+# Download BulkFormer models from Zenodo
+python -m inflamm_debate_fm.cli download models
+
+# Download GEO dataset
+python -m inflamm_debate_fm.cli download geo --gse-id GSE37069
+```
+
+#### Preprocessing Commands
+
+```bash
+# Preprocess a GEO dataset
+python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --gse-id GSE37069
+
+# Run complete preprocessing pipeline
+python -m inflamm_debate_fm.cli preprocess all
+```
+
+#### Embedding Generation
+
+```bash
+# Generate BulkFormer embeddings
+python -m inflamm_debate_fm.cli embed generate <dataset_name> --model-name bulkformer --device cuda
+
+# With custom aggregation method
+python -m inflamm_debate_fm.cli embed generate human_burn --aggregate-type max --device cuda
+```
+
+#### Probing Commands
+
+```bash
+# Run within-species probing
+python -m inflamm_debate_fm.cli probe within-species --species human --use-wandb
+
+# Run cross-species probing
+python -m inflamm_debate_fm.cli probe cross-species --use-wandb
+```
+
+#### Analysis Commands
+
+```bash
+# Analyze coefficients
+python -m inflamm_debate_fm.cli analyze coefficients
+
+# Run GSEA analysis
+python -m inflamm_debate_fm.cli analyze gsea
+```
+
+#### Plotting Commands
+
+```bash
+# Generate plots for within-species results
+python -m inflamm_debate_fm.cli plot within-species --species human
+
+# Generate plots for cross-species results
 python -m inflamm_debate_fm.cli plot cross-species
 ```
 

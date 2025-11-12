@@ -8,8 +8,13 @@ import anndata as ad
 from loguru import logger
 import typer
 
-from inflamm_debate_fm.config import DATA_DIR
+from inflamm_debate_fm.config import (
+    BULKFORMER_DATA_DIR,
+    BULKFORMER_MODEL_DIR,
+    DATA_DIR,
+)
 from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.data.geo_preprocessing import GSE_IDS, process_gse_dataset
 from inflamm_debate_fm.data.load import load_combined_adatas
 from inflamm_debate_fm.data.transforms import (
     transform_adata_to_X_y_acute,
@@ -35,6 +40,10 @@ from inflamm_debate_fm.plots import (
     plot_auroc_bar_clean_sns_top_legend,
     plot_roc_facet_clean,
 )
+from inflamm_debate_fm.utils.download import (
+    download_bulkformer_models,
+    download_geo_dataset,
+)
 from inflamm_debate_fm.utils.wandb_utils import init_wandb
 
 app = typer.Typer(help="inflamm-debate-fm CLI")
@@ -45,15 +54,69 @@ embed_app = typer.Typer(help="Embedding generation commands")
 probe_app = typer.Typer(help="Probing experiment commands")
 analyze_app = typer.Typer(help="Analysis commands")
 plot_app = typer.Typer(help="Plotting commands")
+download_app = typer.Typer(help="Download commands for data and models")
 
 app.add_typer(preprocess_app, name="preprocess")
 app.add_typer(embed_app, name="embed")
 app.add_typer(probe_app, name="probe")
 app.add_typer(analyze_app, name="analyze")
 app.add_typer(plot_app, name="plot")
+app.add_typer(download_app, name="download")
 
 
 # Preprocess commands
+@preprocess_app.command("gse")
+def preprocess_gse(
+    dataset_name: str = typer.Option(..., help="Dataset name (e.g., human_burn)"),
+    gse_id: Optional[str] = typer.Option(None, help="GEO Series ID (e.g., GSE37069)"),
+    geo_download_dir: Optional[Path] = typer.Option(None, help="GEO download directory"),
+    output_dir: Optional[Path] = typer.Option(None, help="Output directory for processed data"),
+    species: str = typer.Option("human", help="Species (human or mouse)"),
+    overwrite: bool = typer.Option(False, help="Overwrite existing files"),
+):
+    """Download and preprocess a GEO dataset into AnnData format.
+
+    Examples:
+        # Preprocess human burn dataset
+        python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --gse-id GSE37069
+
+        # Preprocess mouse burn dataset
+        python -m inflamm_debate_fm.cli preprocess gse --dataset-name mouse_burn --gse-id GSE7404 --species mouse
+    """
+    config = get_config()
+
+    if gse_id is None:
+        # Try to find GSE ID from dataset name
+        dataset_key = dataset_name.replace("_", "").title()
+        if dataset_key in GSE_IDS:
+            gse_id = GSE_IDS[dataset_key]
+            logger.info(f"Using GSE ID {gse_id} for dataset {dataset_name}")
+        else:
+            raise ValueError(
+                f"GSE ID not found for dataset {dataset_name}. "
+                f"Please specify --gse-id. Available datasets: {list(GSE_IDS.keys())}"
+            )
+
+    if geo_download_dir is None:
+        geo_download_dir = DATA_DIR / config["paths"]["geo_download_dir"]
+    else:
+        geo_download_dir = Path(geo_download_dir)
+
+    if output_dir is None:
+        output_dir = DATA_DIR / config["paths"]["raw_data_dir"]
+    else:
+        output_dir = Path(output_dir)
+
+    # Download and process GSE dataset
+    process_gse_dataset(
+        gse_id=gse_id,
+        dataset_name=dataset_name,
+        geo_download_dir=geo_download_dir,
+        output_dir=output_dir,
+        species=species,
+    )
+
+
 @preprocess_app.command("all")
 def preprocess_all(
     ann_data_dir: Optional[Path] = None,
@@ -84,19 +147,27 @@ def embed_generate(
     output_dir: Optional[Path] = None,
     model_name: str = "bulkformer",
     flavor: str = "default",
-    batch_size: int = 32,
+    batch_size: int = 256,
     device: str = "cpu",
+    aggregate_type: str = typer.Option(
+        "max", help="Aggregation method for BulkFormer (max, mean, median, all)"
+    ),
+    model_dir: Optional[Path] = None,
+    data_dir: Optional[Path] = None,
 ):
-    """Generate embeddings for a dataset.
+    """Generate embeddings for a dataset using BulkFormer.
 
     Args:
         dataset_name: Name of the dataset to process.
         ann_data_dir: Directory containing AnnData files.
         output_dir: Directory to save embeddings.
-        model_name: Name of the embedding model.
+        model_name: Name of the embedding model (currently only 'bulkformer').
         flavor: Embedding flavor identifier.
-        batch_size: Batch size for embedding generation.
+        batch_size: Batch size for embedding generation (default: 256 for BulkFormer).
         device: Device to use ('cpu' or 'cuda').
+        aggregate_type: Aggregation method for BulkFormer embeddings ('max', 'mean', 'median', 'all').
+        model_dir: Directory containing model files. If None, uses config default.
+        data_dir: Directory containing data files. If None, uses config default.
     """
     config = get_config()
 
@@ -121,14 +192,17 @@ def embed_generate(
     logger.info(f"Loaded {dataset_name}: {adata.shape}")
 
     # Generate embeddings
-    logger.info(f"Generating embeddings for {dataset_name}...")
+    logger.info(f"Generating embeddings for {dataset_name} using {model_name}...")
     embeddings = generate_embeddings(
         adata=adata,
         model_name=model_name,
         flavor=flavor,
         batch_size=batch_size,
         device=device,
-        output_dir=output_dir,
+        output_dir=None,  # We'll save manually below
+        model_dir=model_dir,
+        data_dir=data_dir,
+        aggregate_type=aggregate_type,
     )
 
     # Save embeddings
@@ -500,6 +574,106 @@ def plot_cross_species(
     plot_roc_facet_clean(all_roc_data=all_roc_data, model_type="Linear", setup_order=setup_order)
 
     logger.success(f"Saved plots to {output_dir}")
+
+
+# Download commands
+@download_app.command("models")
+def download_models(
+    model_dir: Optional[Path] = typer.Option(None, help="Directory to save model files"),
+    data_dir: Optional[Path] = typer.Option(None, help="Directory to save data files"),
+    overwrite: bool = typer.Option(False, help="Overwrite existing files"),
+    record_id: Optional[str] = typer.Option(None, help="Zenodo record ID"),
+):
+    """Download BulkFormer model files from Zenodo.
+
+    Examples:
+        # Download models to default location
+        python -m inflamm_debate_fm.cli download models
+
+        # Download models to custom location
+        python -m inflamm_debate_fm.cli download models --model-dir /path/to/models --data-dir /path/to/data
+    """
+    if model_dir is None:
+        model_dir = BULKFORMER_MODEL_DIR
+    else:
+        model_dir = Path(model_dir)
+
+    if data_dir is None:
+        data_dir = BULKFORMER_DATA_DIR
+    else:
+        data_dir = Path(data_dir)
+
+    download_bulkformer_models(
+        model_dir=model_dir,
+        data_dir=data_dir,
+        overwrite=overwrite,
+        record_id=record_id,
+    )
+
+
+@download_app.command("geo")
+def download_geo(
+    gse_id: str = typer.Option(..., help="GEO Series ID (e.g., GSE37069)"),
+    dest_dir: Optional[Path] = typer.Option(None, help="Directory to download GEO data"),
+    overwrite: bool = typer.Option(False, help="Overwrite existing files"),
+):
+    """Download a GEO dataset using GEOparse.
+
+    Examples:
+        # Download human burn dataset
+        python -m inflamm_debate_fm.cli download geo --gse-id GSE37069
+
+        # Download to custom directory
+        python -m inflamm_debate_fm.cli download geo --gse-id GSE37069 --dest-dir /path/to/geo
+    """
+    config = get_config()
+
+    if dest_dir is None:
+        dest_dir = DATA_DIR / config["paths"]["geo_download_dir"]
+    else:
+        dest_dir = Path(dest_dir)
+
+    download_geo_dataset(gse_id=gse_id, dest_dir=dest_dir, overwrite=overwrite)
+
+
+@download_app.command("all")
+def download_all(
+    overwrite: bool = typer.Option(False, help="Overwrite existing files"),
+):
+    """Download all required data and models.
+
+    This includes:
+    - BulkFormer model files from Zenodo
+    - All GEO datasets for inflammation studies
+
+    Examples:
+        # Download everything
+        python -m inflamm_debate_fm.cli download all
+
+        # Download with overwrite
+        python -m inflamm_debate_fm.cli download all --overwrite
+    """
+    logger.info("Downloading all required data and models...")
+
+    # Download BulkFormer models
+    download_bulkformer_models(
+        model_dir=BULKFORMER_MODEL_DIR,
+        data_dir=BULKFORMER_DATA_DIR,
+        overwrite=overwrite,
+    )
+
+    # Download GEO datasets
+    config = get_config()
+    geo_download_dir = DATA_DIR / config["paths"]["geo_download_dir"]
+
+    for dataset_name, gse_id in GSE_IDS.items():
+        logger.info(f"Downloading {dataset_name} ({gse_id})...")
+        try:
+            download_geo_dataset(gse_id=gse_id, dest_dir=geo_download_dir, overwrite=overwrite)
+        except Exception as e:
+            logger.warning(f"Failed to download {gse_id}: {e}")
+
+    logger.success("All downloads completed!")
 
 
 if __name__ == "__main__":
