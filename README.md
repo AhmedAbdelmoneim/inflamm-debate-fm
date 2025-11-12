@@ -9,10 +9,9 @@ This project analyzes inflammation responses across human and mouse datasets usi
 ## Project Organization
 
 ```
-├── LICENSE            <- Open-source license if one is chosen
 ├── Makefile           <- Makefile with convenience commands
 ├── README.md          <- The top-level README for developers using this project
-├── Singularity.def    <- Singularity container definition for HPC
+├── Singularity.def    <- Apptainer container definition for HPC
 ├── setup_hpc.sh       <- Setup script for Compute Canada HPC
 ├── pyproject.toml     <- Project configuration file with package metadata
 ├── data
@@ -108,7 +107,7 @@ source .venv/bin/activate  # Unix/macOS
 
 1. Load required modules:
 ```bash
-module load singularity
+module load apptainer
 module load python/3.13
 ```
 
@@ -118,14 +117,14 @@ module load python/3.13
 ```
 
 This will:
-- Build the Singularity container image
+- Build the Apptainer container image
 - Create necessary data directories
 - Set up environment variables
 - Create a wrapper script for running commands
 
 3. Use the wrapper script to run commands:
 ```bash
-./run_singularity.sh python -m inflamm_debate_fm.cli <command>
+./run_apptainer.sh python -m inflamm_debate_fm.cli <command>
 ```
 
 ## Configuration
@@ -265,47 +264,123 @@ results, roc_data = evaluate_within_species(
 
 ### Building the Container
 
-The Singularity container can be built on a login node or compute node with Singularity access:
+**Recommended: Build directly on HPC**
+
+You can build the Apptainer container directly on Compute Canada HPC. This is the recommended approach:
 
 ```bash
-module load singularity
-singularity build inflamm-debate-fm.sif Singularity.def
+# On a login node or compute node with Apptainer access
+module load apptainer
+./setup_hpc.sh
 ```
 
-### Running Jobs
+The `setup_hpc.sh` script will:
+- Check for Apptainer availability
+- Build the container image (`inflamm-debate-fm.sif`)
+- Create necessary directories
+- Set up the wrapper script (`run_apptainer.sh`)
 
-Create a SLURM job script:
+**Alternative: Build locally and transfer**
+
+If you prefer to build locally and transfer:
 
 ```bash
-#!/bin/bash
-#SBATCH --job-name=inflamm-probe
-#SBATCH --time=04:00:00
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --gres=gpu:1  # If GPU is needed
+# On your local machine
+apptainer build inflamm-debate-fm.sif Singularity.def
 
-module load singularity
-
-# Set environment variables
-export SINGULARITY_IMAGE="/path/to/inflamm-debate-fm.sif"
-export DATA_DIR="/path/to/data"
-export WANDB_API_KEY="your-api-key"
-
-# Run command
-singularity exec \
-    --bind $DATA_DIR:/opt/inflamm-debate-fm/data \
-    --bind $SCRATCH:/scratch \
-    $SINGULARITY_IMAGE \
-    python -m inflamm_debate_fm.cli probe within-species --species human --use-wandb
+# Transfer to HPC (using scp, rsync, or your preferred method)
+scp inflamm-debate-fm.sif user@login.computecanada.ca:/path/to/project/
 ```
 
-### Using the Wrapper Script
+**Note:** Container images can be large (several GB), so building on HPC avoids large file transfers.
 
-The setup script creates a `run_singularity.sh` wrapper that handles bind mounts:
+### Submitting Jobs to the Queue
+
+The project includes flexible job submission scripts for running different pipeline steps on Compute Canada HPC.
+
+#### Using the Flexible Job Script
+
+The main `run_job.sh` script accepts any CLI command and can be customized with SLURM directives:
 
 ```bash
-./run_singularity.sh python -m inflamm_debate_fm.cli probe within-species --species human
+# Basic usage - submit any CLI command
+sbatch run_job.sh preprocess all
+sbatch run_job.sh embed generate human_burn --device cuda
+sbatch run_job.sh probe within-species --species human
+sbatch run_job.sh probe cross-species
+sbatch run_job.sh analyze coefficients
+sbatch run_job.sh analyze gsea
+sbatch run_job.sh plot within-species --species human
+
+# For GPU jobs (e.g., embeddings), add GPU resource
+sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
+
+# Customize resources inline
+sbatch --time=08:00:00 --mem=32G --cpus-per-task=8 run_job.sh <command>
+```
+
+**Note:** Before using `run_job.sh`, edit it to set your Compute Canada account:
+```bash
+#SBATCH --account=def-<account>  # Replace <account> with your account name
+```
+
+#### Using Pre-configured Job Scripts
+
+For convenience, pre-configured job scripts are available in the `jobs/` directory:
+
+```bash
+# Data preprocessing
+sbatch jobs/preprocess.sh
+
+# Generate embeddings (requires GPU)
+sbatch jobs/embed.sh <dataset_name>
+# Example: sbatch jobs/embed.sh human_burn
+
+# Within-species probing
+sbatch jobs/probe_within.sh <species>
+# Example: sbatch jobs/probe_within.sh human
+
+# Cross-species probing
+sbatch jobs/probe_cross.sh
+
+# Coefficient analysis
+sbatch jobs/analyze_coeffs.sh
+
+# GSEA analysis
+sbatch jobs/analyze_gsea.sh
+```
+
+**Note:** Edit the job scripts in `jobs/` to set your Compute Canada account before use.
+
+#### GPU Support
+
+GPU support is automatically enabled when:
+1. The job requests a GPU via `--gres=gpu:1` in the SLURM script
+2. The command includes `--device cuda` flag
+
+The scripts automatically:
+- Detect GPU allocation via SLURM environment variables (`CUDA_VISIBLE_DEVICES`, `SLURM_GPUS_ON_NODE`)
+- Add the `--nv` flag to Apptainer for GPU access
+- Display GPU information in job logs
+
+**Example GPU usage:**
+```bash
+# Using the embed script (already configured for GPU)
+sbatch jobs/embed.sh human_burn
+
+# Using the flexible script with GPU
+sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
+
+# Requesting a specific GPU type on Compute Canada
+sbatch --gres=gpu:v100:1 run_job.sh embed generate human_burn --device cuda
+```
+
+#### Using the Wrapper Script Directly
+
+For interactive use on login nodes, the setup script creates a `run_apptainer.sh` wrapper:
+
+```bash
+./run_apptainer.sh python -m inflamm_debate_fm.cli probe within-species --species human
 ```
 
 ## Experiment Tracking
