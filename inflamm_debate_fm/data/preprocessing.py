@@ -7,6 +7,32 @@ import pandas as pd
 from inflamm_debate_fm.config import get_config
 
 
+def _parse_group_from_source(adata: ad.AnnData) -> None:
+    """Parse group from source_name_ch1 if not present."""
+    if "group" not in adata.obs.columns:
+        if "source_name_ch1" in adata.obs.columns:
+            adata.obs["group"] = (
+                adata.obs["source_name_ch1"]
+                .str.contains("control", case=False, na=False)
+                .map({True: "control", False: "inflammation"})
+            )
+        else:
+            logger.warning("Cannot parse group: source_name_ch1 not found")
+            adata.obs["group"] = "unknown"
+
+
+def _parse_time_point_from_source(adata: ad.AnnData) -> None:
+    """Parse time_point_hours from source_name_ch1 if not present."""
+    if "time_point_hours" not in adata.obs.columns:
+        if "source_name_ch1" in adata.obs.columns:
+            time_pattern = r"(\d+)\s*(?:hours?|hrs?|h)"
+            time_points = adata.obs["source_name_ch1"].str.extract(time_pattern, expand=False)
+            adata.obs["time_point_hours"] = pd.to_numeric(time_points, errors="coerce")
+        else:
+            logger.warning("Cannot parse time_point_hours: source_name_ch1 not found")
+            adata.obs["time_point_hours"] = pd.NA
+
+
 def fill_and_transform_infl_categories(adatas: dict[str, ad.AnnData]) -> None:
     """Fill and transform inflammation categories for all adatas.
 
@@ -33,7 +59,14 @@ def preprocess_human_burn(
         human_acute_cutoff: Acute cutoff in hours.
         human_subacute_cutoff: Subacute cutoff in hours.
     """
-    adata.obs["age"] = pd.to_numeric(adata.obs["age"], errors="coerce")
+    # Parse group and time_point_hours from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+    _parse_time_point_from_source(adata)
+
+    # Set age if present, otherwise skip
+    if "age" in adata.obs.columns:
+        adata.obs["age"] = pd.to_numeric(adata.obs["age"], errors="coerce")
+
     adata.obs.loc[adata.obs["group"] == "control", "time_point_hours"] = pd.NA
     adata.obs["takao_inflamed"] = adata.obs["group"] == "inflammation"
     adata.obs["takao_control"] = adata.obs["group"] == "control"
@@ -65,7 +98,14 @@ def preprocess_human_trauma(
         human_acute_cutoff: Acute cutoff in hours.
         human_subacute_cutoff: Subacute cutoff in hours.
     """
-    adata.obs["age"] = pd.to_numeric(adata.obs["age"], errors="coerce")
+    # Parse group and time_point_hours from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+    _parse_time_point_from_source(adata)
+
+    # Set age if present, otherwise skip
+    if "age" in adata.obs.columns:
+        adata.obs["age"] = pd.to_numeric(adata.obs["age"], errors="coerce")
+
     adata.obs["takao_inflamed"] = (adata.obs["group"] == "inflammation") & (
         adata.obs["time_point_hours"] > (14 * 24)
     )
@@ -95,6 +135,9 @@ def preprocess_human_sepsis(adata: ad.AnnData) -> None:
     Args:
         adata: AnnData object for human_sepsis.
     """
+    # Parse group from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+
     adata.obs["takao_inflamed"] = adata.obs["group"] == "inflammation"
     adata.obs["takao_control"] = adata.obs["group"] == "control"
     adata.obs["takao_status"] = pd.NA
@@ -113,6 +156,10 @@ def preprocess_mouse_burn(
         mouse_acute_cutoff: Acute cutoff in hours.
         mouse_subacute_cutoff: Subacute cutoff in hours.
     """
+    # Parse group and time_point_hours from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+    _parse_time_point_from_source(adata)
+
     adata.obs["takao_inflamed"] = (adata.obs["group"] == "inflammation") & (
         adata.obs["time_point_hours"] >= 150
     )
@@ -146,6 +193,10 @@ def preprocess_mouse_trauma(
         mouse_acute_cutoff: Acute cutoff in hours.
         mouse_subacute_cutoff: Subacute cutoff in hours.
     """
+    # Parse group and time_point_hours from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+    _parse_time_point_from_source(adata)
+
     adata.obs["takao_inflamed"] = (adata.obs["group"] == "inflammation") & (
         adata.obs["time_point_hours"] > 72
     )
@@ -179,21 +230,39 @@ def preprocess_mouse_sepsis(
         mouse_acute_cutoff: Acute cutoff in hours.
         mouse_subacute_cutoff: Subacute cutoff in hours.
     """
-    adata.obs["takao_inflamed"] = (
-        (adata.obs["group"] == "inflammation")
-        & (adata.obs["time_point"] == 4.0)
-        & (adata.obs["strain"] == "C57BL/6J")
-    )
-    adata.obs["takao_control"] = (adata.obs["group"] == "control") & (
-        adata.obs["strain"] == "C57BL/6J"
-    )
+    # Parse group from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+
+    # Handle time_point column - convert to time_point_hours if present
+    if "time_point" in adata.obs.columns:
+        adata.obs["time_point_hours"] = pd.to_numeric(adata.obs["time_point"], errors="coerce")
+        adata.obs.loc[adata.obs["group"] == "control", "time_point"] = pd.NA
+        adata.obs = adata.obs.drop(columns=["time_point"])
+    elif "time_point_hours" not in adata.obs.columns:
+        _parse_time_point_from_source(adata)
+
+    # Check for strain column, otherwise skip strain filtering
+    has_strain = "strain" in adata.obs.columns
+
+    if has_strain:
+        adata.obs["takao_inflamed"] = (
+            (adata.obs["group"] == "inflammation")
+            & (adata.obs["time_point_hours"] == 4.0)
+            & (adata.obs["strain"] == "C57BL/6J")
+        )
+        adata.obs["takao_control"] = (adata.obs["group"] == "control") & (
+            adata.obs["strain"] == "C57BL/6J"
+        )
+    else:
+        adata.obs["takao_inflamed"] = (adata.obs["group"] == "inflammation") & (
+            adata.obs["time_point_hours"] == 4.0
+        )
+        adata.obs["takao_control"] = adata.obs["group"] == "control"
+
     adata.obs["takao_status"] = pd.NA
     adata.obs.loc[adata.obs["takao_inflamed"], "takao_status"] = "takao_inflamed"
     adata.obs.loc[adata.obs["takao_control"], "takao_status"] = "takao_control"
-    adata.obs.loc[adata.obs["group"] == "control", "time_point"] = pd.NA
     adata.obs["takao_status"] = adata.obs["takao_status"].astype("category")
-    adata.obs["time_point_hours"] = adata.obs["time_point"]
-    adata.obs = adata.obs.drop(columns=["time_point"])
 
     adata.obs["infl_acute"] = (adata.obs["group"] != "control") & (
         adata.obs["time_point_hours"] < mouse_acute_cutoff
@@ -218,11 +287,24 @@ def preprocess_mouse_infection(
         mouse_acute_cutoff: Acute cutoff in hours.
         mouse_subacute_cutoff: Subacute cutoff in hours.
     """
-    adata.obs["takao_inflamed"] = (
-        (adata.obs["group"] == "inflammation")
-        & (adata.obs["time_point_hours"] == 24)
-        & (adata.obs["infection_status_detail"] == "candida")
-    )
+    # Parse group and time_point_hours from source_name_ch1 if not present
+    _parse_group_from_source(adata)
+    _parse_time_point_from_source(adata)
+
+    # Check for infection_status_detail column
+    has_infection_status = "infection_status_detail" in adata.obs.columns
+
+    if has_infection_status:
+        adata.obs["takao_inflamed"] = (
+            (adata.obs["group"] == "inflammation")
+            & (adata.obs["time_point_hours"] == 24)
+            & (adata.obs["infection_status_detail"] == "candida")
+        )
+    else:
+        adata.obs["takao_inflamed"] = (adata.obs["group"] == "inflammation") & (
+            adata.obs["time_point_hours"] == 24
+        )
+
     adata.obs["takao_control"] = adata.obs["group"] == "control"
     adata.obs["takao_status"] = pd.NA
     adata.obs.loc[adata.obs["takao_inflamed"], "takao_status"] = "takao_inflamed"

@@ -10,13 +10,13 @@
 
 # Flexible SLURM job script for inflamm-debate-fm
 # Usage examples:
-#   sbatch run_job.sh preprocess all
+#   sbatch run_job.sh preprocess data
 #   sbatch run_job.sh embed generate human_burn --device cuda
-#   sbatch run_job.sh probe within-species --species human
+#   sbatch run_job.sh probe within-species human
 #   sbatch run_job.sh probe cross-species
 #   sbatch run_job.sh analyze coefficients
 #   sbatch run_job.sh analyze gsea
-#   sbatch run_job.sh plot within-species --species human
+#   sbatch run_job.sh plot within-species human
 #
 # For GPU jobs (e.g., embeddings), add to sbatch command:
 #   sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda

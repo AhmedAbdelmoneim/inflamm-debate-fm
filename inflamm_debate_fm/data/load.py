@@ -31,10 +31,18 @@ def load_combined_adatas(combined_data_dir: Path) -> dict[str, ad.AnnData]:
 
 def combine_adatas(adatas: dict[str, ad.AnnData], species_prefix: str) -> ad.AnnData:
     """Combine AnnData objects for a given species."""
-    species_adatas = [adatas[k] for k in sorted(adatas.keys()) if k.startswith(species_prefix)]
+    species_keys = [k for k in sorted(adatas.keys()) if k.startswith(species_prefix)]
+    if len(species_keys) == 0:
+        raise ValueError(f"No datasets found with prefix '{species_prefix}'")
+    species_adatas = [adatas[k] for k in species_keys]
+    if len(species_adatas) == 1:
+        # If only one dataset, return it directly with dataset label
+        result = species_adatas[0].copy()
+        result.obs["dataset"] = species_keys[0]
+        return result
     return ad.concat(
         species_adatas,
         join="outer",
         label="dataset",
-        keys=[k for k in sorted(adatas.keys()) if k.startswith(species_prefix)],
+        keys=species_keys,
     )

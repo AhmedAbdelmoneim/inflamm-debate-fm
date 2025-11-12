@@ -86,6 +86,6 @@ timeout = "8h"
 
 [wandb]
 project = "inflamm-debate-fm"
-entity = null  # Set via environment variable WANDB_ENTITY if needed
+# entity is optional - set via environment variable WANDB_ENTITY if needed
 tags = ["research", "inflammation"]
 

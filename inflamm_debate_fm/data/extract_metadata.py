@@ -15,6 +15,7 @@ def extract_all_metadata(geo_download_dir: Path, output_dir: Path):
     for gse_id in GSE_IDS.values():
         output_file = output_dir / f"{gse_id}.csv"
         if output_file.exists():
+            logger.info(f"Metadata for {gse_id} already exists, skipping extraction.")
             continue
         logger.info(f"Extracting metadata for {gse_id}...")
         try:

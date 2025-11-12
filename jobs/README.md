@@ -16,14 +16,29 @@ Before using these scripts, you must:
 ## Available Job Scripts
 
 ### `preprocess.sh`
-Runs the complete data preprocessing pipeline.
+Runs the complete data processing pipeline (download, preprocess, map orthologs, combine).
+
+This pipeline:
+1. Downloads raw data (CEL files, orthology files, BrainArray packages)
+2. Extracts metadata from GEO datasets
+3. Runs RMA preprocessing using R script
+4. Converts to AnnData format
+5. Maps orthologs (mouse → human, human → Ensembl)
+6. Preprocesses and combines datasets
+
+**Note:** The pipeline auto-detects existing files and skips completed steps, so it's safe to re-run.
 
 **Usage:**
 ```bash
 sbatch jobs/preprocess.sh
 ```
 
-**Resources:** 4 CPUs, 16GB RAM, 2 hours
+**Resources:** 8 CPUs, 32GB RAM, 24 hours
+
+**Note:** This job does NOT require GPU - it's CPU-only data processing. The longer time limit (24 hours) accounts for:
+- Network downloads (can be slow)
+- RMA preprocessing with R (computationally intensive)
+- Ortholog mapping with MyGene.info API calls
 
 ---
 
