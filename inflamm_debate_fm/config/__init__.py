@@ -1,6 +1,7 @@
 """Configuration module for inflamm-debate-fm."""
 
 from inflamm_debate_fm.config.config import (
+    ANNDATA_RAW_DIR,
     BULKFORMER_DATA_DIR,
     BULKFORMER_MODEL_DIR,
     DATA_DIR,
@@ -9,18 +10,25 @@ from inflamm_debate_fm.config.config import (
     FIGURES_DIR,
     GEO_DOWNLOAD_DIR,
     INTERIM_DATA_DIR,
+    METADATA_DIR,
     MODELS_DIR,
     MODELS_ROOT,
+    ORTHOLOGY_DIR,
+    PLATFORMS_DIR,
     PROCESSED_DATA_DIR,
     PROJ_ROOT,
+    RAW_CEL_DIR,
     RAW_DATA_DIR,
     REPORTS_DIR,
+    RMA_PROCESSED_DIR,
+    SCRIPTS_DIR,
     get_config,
     load_config,
 )
 
 # Export all configuration variables and functions
 __all__ = [
+    "ANNDATA_RAW_DIR",
     "BULKFORMER_DATA_DIR",
     "BULKFORMER_MODEL_DIR",
     "DATA_DIR",
@@ -29,12 +37,18 @@ __all__ = [
     "FIGURES_DIR",
     "GEO_DOWNLOAD_DIR",
     "INTERIM_DATA_DIR",
+    "METADATA_DIR",
     "MODELS_DIR",
     "MODELS_ROOT",
+    "ORTHOLOGY_DIR",
+    "PLATFORMS_DIR",
     "PROCESSED_DATA_DIR",
     "PROJ_ROOT",
+    "RAW_CEL_DIR",
     "RAW_DATA_DIR",
     "REPORTS_DIR",
+    "RMA_PROCESSED_DIR",
+    "SCRIPTS_DIR",
     "get_config",
     "load_config",
 ]

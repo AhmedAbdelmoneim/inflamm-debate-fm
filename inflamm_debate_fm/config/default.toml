@@ -55,6 +55,12 @@ gsea_results_dir = "gsea"
 post_analysis_dir = "post_analysis"
 geo_download_dir = "raw/geo_downloads"
 raw_data_dir = "raw"
+raw_cel_dir = "raw/raw_cel"
+metadata_dir = "raw/metadata"
+platforms_dir = "external/platforms"
+orthology_dir = "external/mouse_orthology"
+rma_processed_dir = "interim/rma_brainarray_processed"
+anndata_raw_dir = "interim/anndata"
 
 [hpc]
 # Resource specifications for Flyte tasks

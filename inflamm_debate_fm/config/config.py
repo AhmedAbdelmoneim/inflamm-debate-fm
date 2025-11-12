@@ -53,9 +53,24 @@ GEO_DOWNLOAD_DIR = DATA_DIR / "raw" / "geo_downloads"
 BULKFORMER_MODEL_DIR = MODELS_DIR / "BulkFormer" / "model"
 BULKFORMER_DATA_DIR = MODELS_DIR / "BulkFormer" / "data"
 
+# External data directories (relative to DATA_ROOT)
+ORTHOLOGY_DIR = EXTERNAL_DATA_DIR / "mouse_orthology"
+PLATFORMS_DIR = EXTERNAL_DATA_DIR / "platforms"
+
+# Raw data directories (relative to DATA_ROOT)
+RAW_CEL_DIR = RAW_DATA_DIR / "raw_cel"
+METADATA_DIR = RAW_DATA_DIR / "metadata"
+
+# Interim data directories (relative to DATA_ROOT)
+RMA_PROCESSED_DIR = INTERIM_DATA_DIR / "rma_brainarray_processed"
+ANNDATA_RAW_DIR = INTERIM_DATA_DIR / "anndata"
+
 # Other directories (usually in project root)
 REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
+
+# Scripts directory
+SCRIPTS_DIR = PROJ_ROOT / "scripts"
 
 # Configure loguru to work with tqdm if available
 # https://github.com/Delgan/loguru/issues/135
