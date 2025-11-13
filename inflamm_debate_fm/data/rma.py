@@ -1,4 +1,7 @@
-"""Preprocess raw CEL files using RMA and BrainArray CDF packages."""
+"""RMA preprocessing of raw CEL files using BrainArray CDF packages.
+
+This module handles RMA preprocessing via an R script and converts the results to AnnData format.
+"""
 
 import os
 import subprocess
@@ -38,12 +41,11 @@ def convert_to_anndata():
 
     ANNDATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
     gse_to_datasets = {
-        "GSE37069": ["human_burn"],
-        "GSE36809": ["human_trauma"],
-        "GSE28750": ["human_sepsis"],
-        "GSE19668": ["mouse_sepsis"],
-        "GSE20524": ["mouse_infection"],
-        "GSE7404": ["mouse_burn", "mouse_trauma"],
+        "GSE37069": "human_burn",
+        "GSE36809": "human_trauma",
+        "GSE28750": "human_sepsis",
+        "GSE19668": "mouse_sepsis",
+        "GSE20524": "mouse_infection",
     }
 
     for dataset_dir in RMA_PROCESSED_DIR.iterdir():
@@ -54,12 +56,15 @@ def convert_to_anndata():
         if not expr_file.exists():
             continue
 
-        expr_df = pd.read_csv(expr_file, index_col=0).astype(float)
         metadata_file = METADATA_DIR / f"{gse_id}.csv"
         if not metadata_file.exists():
+            logger.warning(f"Metadata file not found for {gse_id}: {metadata_file}")
             continue
 
+        expr_df = pd.read_csv(expr_file, index_col=0).astype(float)
         meta_df = pd.read_csv(metadata_file, dtype=str, index_col="geo_accession")
+
+        # Align expression and metadata
         expr_df.columns = expr_df.columns.str.extract(r"(GSM\d+)", expand=False)
         expr_df.index = expr_df.index.str.replace(r"_at$", "", regex=True)
         meta_aligned = meta_df.reindex(expr_df.columns)
@@ -68,12 +73,13 @@ def convert_to_anndata():
         meta_aligned = meta_aligned.loc[keep]
 
         if gse_id == "GSE7404":
-            if "source_name_ch1" in meta_aligned.columns:
-                burn_mask = meta_aligned["source_name_ch1"].str.contains(
-                    "burn", case=False, na=False
+            # Split based on description column
+            if "description" in meta_aligned.columns:
+                burn_mask = meta_aligned["description"].str.contains(
+                    "burn injury model", case=False, na=False
                 )
-                trauma_mask = meta_aligned["source_name_ch1"].str.contains(
-                    "trauma", case=False, na=False
+                trauma_mask = meta_aligned["description"].str.contains(
+                    "trauma hemorrage injury model", case=False, na=False
                 )
                 if burn_mask.any():
                     ad.AnnData(
@@ -81,16 +87,19 @@ def convert_to_anndata():
                         obs=meta_aligned.loc[burn_mask].astype(str),
                         var=pd.DataFrame(index=expr_df.index),
                     ).write(ANNDATA_RAW_DIR / "GSE7404_mouse_burn_gene_rma_brainarray.h5ad")
+                    logger.success(f"Saved mouse_burn: {burn_mask.sum()} samples")
                 if trauma_mask.any():
                     ad.AnnData(
                         X=expr_df.loc[:, trauma_mask].T.values,
                         obs=meta_aligned.loc[trauma_mask].astype(str),
                         var=pd.DataFrame(index=expr_df.index),
                     ).write(ANNDATA_RAW_DIR / "GSE7404_mouse_trauma_gene_rma_brainarray.h5ad")
-        else:
-            dataset_name = gse_to_datasets.get(gse_id, [gse_id])[0]
+                    logger.success(f"Saved mouse_trauma: {trauma_mask.sum()} samples")
+        elif gse_id in gse_to_datasets:
+            dataset_name = gse_to_datasets[gse_id]
             ad.AnnData(
                 X=expr_df.T.values,
                 obs=meta_aligned.astype(str),
                 var=pd.DataFrame(index=expr_df.index),
             ).write(ANNDATA_RAW_DIR / f"{gse_id}_{dataset_name}_gene_rma_brainarray.h5ad")
+            logger.success(f"Saved {dataset_name}: {expr_df.shape[1]} samples")

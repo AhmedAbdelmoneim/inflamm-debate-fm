@@ -49,7 +49,7 @@ figure_figsize = [10, 8]
 # Internal structure remains the same regardless of root location
 ann_data_dir = "processed/anndata_orthologs"
 embeddings_dir = "processed/bulkformer_embeddings"
-combined_data_dir = "processed/anndata_combined"
+anndata_cleaned_dir = "processed/anndata_cleaned"
 model_coefficients_dir = "model_coefficients"
 gsea_results_dir = "gsea"
 post_analysis_dir = "post_analysis"

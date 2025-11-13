@@ -15,8 +15,8 @@ def preprocess_data_task(
     load_embeddings: bool = True,
 ) -> str:
     """Flyte task for data preprocessing and combining."""
+    from inflamm_debate_fm.data.clean import preprocess_all_datasets
     from inflamm_debate_fm.data.load import combine_adatas, load_adatas
-    from inflamm_debate_fm.data.preprocessing import preprocess_all_datasets
 
     ann_data_dir = Path(ann_data_dir)
     embeddings_dir = Path(embeddings_dir)

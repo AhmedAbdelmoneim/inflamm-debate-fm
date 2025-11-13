@@ -133,7 +133,12 @@ def load_config(config_path: Path | str | None = None) -> dict[str, Any]:
             if isinstance(value, str) and not Path(value).is_absolute():
                 if "model_coefficients" in key or "gsea" in key or "post_analysis" in key:
                     config["paths"][key] = str(DATA_DIR / value)
-                elif "embeddings" in key or "ann_data" in key or "combined" in key:
+                elif (
+                    "embeddings" in key
+                    or "ann_data" in key
+                    or "anndata" in key
+                    or "combined" in key
+                ):
                     config["paths"][key] = str(DATA_DIR / value)
                 else:
                     config["paths"][key] = str(PROJ_ROOT / value)
