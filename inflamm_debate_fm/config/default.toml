@@ -39,13 +39,28 @@ figure_figsize = [10, 8]
 
 [paths]
 # Paths can be overridden via environment variables
-# Data paths are relative to DATA_DIR from config.py
+# Data paths are relative to DATA_ROOT (configurable via INFLAMM_DEBATE_FM_DATA_ROOT)
+# Models paths are relative to MODELS_ROOT (configurable via INFLAMM_DEBATE_FM_MODELS_ROOT)
+#
+# To use a different data directory (e.g., on HPC):
+#   export INFLAMM_DEBATE_FM_DATA_ROOT="/path/to/large/data/directory"
+#   export INFLAMM_DEBATE_FM_MODELS_ROOT="/path/to/models/directory"
+#
+# Internal structure remains the same regardless of root location
 ann_data_dir = "processed/anndata_orthologs"
 embeddings_dir = "processed/bulkformer_embeddings"
-combined_data_dir = "processed/anndata_combined"
+anndata_cleaned_dir = "processed/anndata_cleaned"
 model_coefficients_dir = "model_coefficients"
 gsea_results_dir = "gsea"
 post_analysis_dir = "post_analysis"
+geo_download_dir = "raw/geo_downloads"
+raw_data_dir = "raw"
+raw_cel_dir = "raw/raw_cel"
+metadata_dir = "raw/metadata"
+platforms_dir = "external/platforms"
+orthology_dir = "external/mouse_orthology"
+rma_processed_dir = "interim/rma_brainarray_processed"
+anndata_raw_dir = "interim/anndata"
 
 [hpc]
 # Resource specifications for Flyte tasks
@@ -71,6 +86,6 @@ timeout = "8h"
 
 [wandb]
 project = "inflamm-debate-fm"
-entity = null  # Set via environment variable WANDB_ENTITY if needed
+# entity is optional - set via environment variable WANDB_ENTITY if needed
 tags = ["research", "inflammation"]
 

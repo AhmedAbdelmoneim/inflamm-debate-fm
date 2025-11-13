@@ -1,14 +1,12 @@
 """Functions for loading pre-computed embeddings."""
 
 from pathlib import Path
-from typing import Dict
 
 import anndata as ad
 from loguru import logger
 import numpy as np
 
-from inflamm_debate_fm.config import DATA_DIR
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import DATA_DIR, get_config
 
 
 def load_embedding(
@@ -53,7 +51,7 @@ def load_embedding(
 
 
 def load_embeddings_for_adatas(
-    adatas: Dict[str, ad.AnnData],
+    adatas: dict[str, ad.AnnData],
     embeddings_dir: Path | str | None = None,
     flavor: str = "default",
     embedding_key: str = "X_bulkformer",

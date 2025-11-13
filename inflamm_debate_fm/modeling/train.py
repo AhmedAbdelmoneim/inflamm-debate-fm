@@ -7,8 +7,7 @@ from typing import List, Optional
 from loguru import logger
 import typer
 
-from inflamm_debate_fm.config import DATA_DIR
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import DATA_DIR, get_config
 from inflamm_debate_fm.data.load import load_combined_adatas
 from inflamm_debate_fm.data.transforms import (
     transform_adata_to_X_y_acute,
@@ -49,13 +48,13 @@ def get_setup_transforms():
 @app.command()
 def within_species(
     species: str = typer.Option(..., help="Species: 'human' or 'mouse'"),
-    combined_data_dir: Optional[Path] = None,
-    output_dir: Optional[Path] = None,
+    combined_data_dir: Path | None = None,
+    output_dir: Path | None = None,
     n_cv_folds: int = 10,
     use_wandb: bool = True,
-    wandb_project: Optional[str] = None,
-    wandb_entity: Optional[str] = None,
-    wandb_tags: Optional[List[str]] = None,
+    wandb_project: str | None = None,
+    wandb_entity: str | None = None,
+    wandb_tags: list[str] | None = None,
 ):
     """Run within-species probing experiments.
 

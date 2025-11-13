@@ -10,21 +10,16 @@ PYTHON_INTERPRETER = python
 # COMMANDS                                                                      #
 #################################################################################
 
-
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
 	uv sync
-	
-
-
 
 ## Delete all compiled Python files
 .PHONY: clean
 clean:
 	find . -type f -name "*.py[co]" -delete
 	find . -type d -name "__pycache__" -delete
-
 
 ## Lint using ruff (use `make format` to do formatting)
 .PHONY: lint
@@ -38,10 +33,6 @@ format:
 	ruff check --fix
 	ruff format
 
-
-
-
-
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
@@ -49,19 +40,15 @@ create_environment:
 	@echo ">>> New uv virtual environment created. Activate with:"
 	@echo ">>> Windows: .\\\\.venv\\\\Scripts\\\\activate"
 	@echo ">>> Unix/macOS: source ./.venv/bin/activate"
-	
-
-
 
 #################################################################################
 # PROJECT RULES                                                                 #
 #################################################################################
 
-
-## Make dataset (preprocess data)
+## Process data (download, preprocess, map orthologs, combine)
 .PHONY: data
 data: requirements
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli preprocess all
+	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli preprocess data
 
 ## Generate embeddings for a dataset
 .PHONY: embed
@@ -120,22 +107,6 @@ plot-cross: requirements
 .PHONY: test
 test: requirements
 	$(PYTHON_INTERPRETER) -m pytest tests/ -v
-
-## Run full pipeline (preprocess -> probe -> analyze -> plot)
-.PHONY: pipeline
-pipeline: requirements
-	@echo "Running full pipeline..."
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli preprocess all
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli probe within-species --species human
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli probe within-species --species mouse
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli probe cross-species
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli analyze coefficients
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli analyze gsea
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli plot within-species --species human
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli plot within-species --species mouse
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli plot cross-species
-	@echo "Pipeline complete!"
-
 
 #################################################################################
 # Self Documenting Commands                                                     #

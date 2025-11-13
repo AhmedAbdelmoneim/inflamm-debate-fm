@@ -18,6 +18,7 @@ classifiers = [
 dependencies = [
     "anndata>=0.10.0",
     "flytekit>=1.10.0",
+    "GEOparse>=1.2.0",
     "gseapy>=1.1.10",
     "ipykernel>=7.1.0",
     "loguru",
@@ -25,21 +26,25 @@ dependencies = [
     "mygene>=3.2.2",
     "numpy>=1.24.0",
     "pandas>=2.3.3",
+    "performer-pytorch>=1.1.4",
     "pip",
     "pre-commit>=4.3.0",
     "python-dotenv",
+    "requests>=2.31.0",
     "ruff",
     "scanpy>=1.11.5",
     "scikit-dimension>=0.3.4",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
     "tomli>=2.0.0; python_version < '3.11'",
+    "torch>=2.0.0",
+    "torch-geometric>=2.0.0",
     "tqdm",
     "typer",
     "wandb>=0.22.2",
     "xgboost>=3.1.1",
 ]
-requires-python = "~=3.13.0"
+requires-python = ">=3.10"
 
 
 [tool.ruff]

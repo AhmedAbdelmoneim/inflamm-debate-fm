@@ -1,6 +1,6 @@
 """Evaluation functions for model performance."""
 
-from typing import Callable, Dict, List, Tuple
+from collections.abc import Callable
 
 import anndata as ad
 import numpy as np
@@ -9,19 +9,19 @@ from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedKFold, cross_val_score
 from tqdm import tqdm
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 from inflamm_debate_fm.modeling.pipelines import get_linear_pipelines, get_nonlinear_pipelines
 
 
 def evaluate_within_species(
     adata: ad.AnnData,
-    setups: List[Tuple[str, Callable]],
+    setups: list[tuple[str, Callable]],
     species_name: str,
     lodo_group_key: str = "dataset",
     n_cv_folds: int = 10,
     use_wandb: bool = False,
     wandb_run=None,
-) -> Tuple[Dict, Dict]:
+) -> tuple[dict, dict]:
     """Evaluate model performance within a single species.
 
     Args:
@@ -170,10 +170,10 @@ def evaluate_within_species(
 def evaluate_cross_species(
     human_adata: ad.AnnData,
     mouse_adata: ad.AnnData,
-    setups: List[Tuple[str, Callable]],
+    setups: list[tuple[str, Callable]],
     use_wandb: bool = False,
     wandb_run=None,
-) -> Tuple[Dict, Dict]:
+) -> tuple[dict, dict]:
     """Evaluate cross-species model performance.
 
     Args:

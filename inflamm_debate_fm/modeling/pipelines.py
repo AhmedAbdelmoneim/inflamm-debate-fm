@@ -6,7 +6,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 
 
 def get_linear_pipelines() -> dict[str, Pipeline]:

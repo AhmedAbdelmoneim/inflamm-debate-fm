@@ -1,19 +1,19 @@
 """Wandb utility functions."""
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 import wandb
 
-from inflamm_debate_fm.config.config import get_config
+from inflamm_debate_fm.config import get_config
 
 
 def init_wandb(
-    project: Optional[str] = None,
-    entity: Optional[str] = None,
-    tags: Optional[list[str]] = None,
-    config: Optional[Dict[str, Any]] = None,
+    project: str | None = None,
+    entity: str | None = None,
+    tags: list[str] | None = None,
+    config: dict[str, Any] | None = None,
     mode: str = "online",
 ) -> wandb.Run:
     """Initialize wandb run.
@@ -44,7 +44,7 @@ def init_wandb(
     return run
 
 
-def log_results(results: Dict[str, Any], prefix: str = "", step: Optional[int] = None) -> None:
+def log_results(results: dict[str, Any], prefix: str = "", step: int | None = None) -> None:
     """Log results to wandb.
 
     Args:
