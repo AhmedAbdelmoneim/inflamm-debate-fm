@@ -221,7 +221,7 @@ def preprocess_human_trauma(
     )
     adata.obs["time_point_hours"] = adata.obs["time_point_hours"].fillna(0)
 
-    # Remove rows with any NaN values in expression matrix
+    # Remove genes (columns) with any NaN values in expression matrix
     nan_mask = np.any(np.isnan(adata.X), axis=0)
     adata = adata[:, ~nan_mask].copy()
 
