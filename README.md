@@ -19,9 +19,14 @@ cd inflamm-debate-fm
 # Install uv if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Sync dependencies
+# Sync dependencies (installs PyTorch 2.8.* with CUDA 12.9 and PyG optional dependencies)
 make requirements
 ```
+
+**Note:** This project uses Python 3.12.7 and PyTorch 2.8.* with CUDA 12.9 support. The `make requirements` command will:
+- Install PyTorch 2.8.* with CUDA 12.9 from PyTorch's wheel repository
+- Install torch-geometric and other dependencies
+- Install PyG optional dependencies (pyg_lib, torch_scatter, torch_sparse, torch_cluster, torch_spline_conv) from the PyG wheel repository
 
 3. Activate the virtual environment:
 ```bash

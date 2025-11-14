@@ -13,7 +13,20 @@ PYTHON_INTERPRETER = python
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
+	@# Install PyTorch 2.8.* with CUDA 12.9 first (before uv sync to ensure CUDA version)
+	@echo "Installing PyTorch 2.8.* with CUDA 12.9..."
+	@uv pip install --index-url https://download.pytorch.org/whl/cu129 \
+		"torch>=2.8.0,<2.9.0" || echo "Warning: PyTorch installation failed."
+	@# Sync other dependencies (torch should already be installed, so this won't reinstall it)
 	uv sync
+	@# Ensure torch is still the CUDA version (in case uv sync changed it)
+	@uv pip install --index-url https://download.pytorch.org/whl/cu129 \
+		--upgrade-package torch "torch>=2.8.0,<2.9.0" || true
+	@# Install PyG optional dependencies from wheel find-links (requires torch to be installed first)
+	@echo "Installing PyG optional dependencies from wheel repository..."
+	@uv pip install --find-links https://data.pyg.org/whl/torch-2.8.0+cu129.html \
+		pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv || \
+		echo "Warning: Some PyG optional dependencies failed to install."
 
 ## Delete all compiled Python files
 .PHONY: clean
@@ -36,7 +49,7 @@ format:
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
-	uv venv --python $(PYTHON_VERSION)
+	uv venv --python 3.12.7
 	@echo ">>> New uv virtual environment created. Activate with:"
 	@echo ">>> Windows: .\\\\.venv\\\\Scripts\\\\activate"
 	@echo ">>> Unix/macOS: source ./.venv/bin/activate"
