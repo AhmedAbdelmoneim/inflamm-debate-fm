@@ -50,16 +50,38 @@ create_environment:
 data: requirements
 	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli preprocess data
 
+## Set up BulkFormer model (clone repo and check for model files)
+.PHONY: bulkformer-setup
+bulkformer-setup: requirements
+	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.bulkformer.setup
+
 ## Generate embeddings for a dataset
 .PHONY: embed
 embed: requirements
-	@echo "Usage: make embed DATASET=<dataset_name>"
+	@echo "Usage: make embed DATASET=<dataset_name> [DEVICE=<cpu|cuda>] [BATCH_SIZE=<256>]"
 	@if [ -z "$(DATASET)" ]; then \
 		echo "Error: DATASET variable is required"; \
 		echo "Example: make embed DATASET=human_burn"; \
 		exit 1; \
 	fi
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed generate $(DATASET)
+	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed generate $(DATASET) \
+		--device $(or $(DEVICE),cpu) \
+		--batch-size $(or $(BATCH_SIZE),256)
+
+## Generate embeddings for all configurations (human-only, mouse-only, human-ortholog-filtered)
+.PHONY: embed-all
+embed-all: requirements
+	@echo "Usage: make embed-all [DEVICE=<cpu|cuda>] [BATCH_SIZE=<256>] [USE_WANDB=<true|false>]"
+	@if [ "$(USE_WANDB)" = "true" ]; then \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
+			--device $(or $(DEVICE),cpu) \
+			--batch-size $(or $(BATCH_SIZE),256) \
+			--use-wandb; \
+	else \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
+			--device $(or $(DEVICE),cpu) \
+			--batch-size $(or $(BATCH_SIZE),256); \
+	fi
 
 ## Run within-species probing experiments
 .PHONY: probe-within

@@ -51,11 +51,17 @@ make help
 # Install dependencies
 make requirements
 
+# Set up BulkFormer model (clone repo and check for model files)
+make bulkformer-setup
+
 # Process data (download, preprocess, map orthologs, combine)
 make data
 
 # Generate embeddings for a dataset
 make embed DATASET=human_burn
+
+# Generate embeddings for all configurations (human-only, mouse-only, human-ortholog-filtered)
+make embed-all DEVICE=cuda USE_WANDB=true
 
 # Run within-species probing
 make probe-within SPECIES=human
@@ -82,12 +88,15 @@ make clean     # Remove compiled Python files
 
 ### Pipeline Workflow
 
-1. **Data Preprocessing**: `make data`
-2. **Embedding Generation**: `make embed DATASET=<dataset_name>`
-3. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
-4. **Coefficient Analysis**: `make analyze-coeffs`
-5. **GSEA Analysis**: `make analyze-gsea`
-6. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
+1. **BulkFormer Setup**: `make bulkformer-setup` (clone repo and verify model files)
+2. **Data Preprocessing**: `make data`
+3. **Embedding Generation**: 
+   - Single dataset: `make embed DATASET=<dataset_name>`
+   - All configurations: `make embed-all DEVICE=cuda` (generates human-only, mouse-only, and human-ortholog-filtered embeddings)
+4. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
+5. **Coefficient Analysis**: `make analyze-coeffs`
+6. **GSEA Analysis**: `make analyze-gsea`
+7. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
 
 ## Configuration
 
@@ -113,9 +122,15 @@ module load apptainer
 
 2. Submit jobs using the flexible script:
 ```bash
-sbatch run_job.sh preprocess all
+sbatch run_job.sh preprocess data
 sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
+sbatch --gres=gpu:1 run_job.sh embed all-configs --device cuda --use-wandb
 sbatch run_job.sh probe within-species --species human
+```
+
+Or use pre-configured job scripts:
+```bash
+sbatch jobs/embed_all.sh USE_WANDB=true
 ```
 
 See `jobs/README.md` for pre-configured job scripts.
