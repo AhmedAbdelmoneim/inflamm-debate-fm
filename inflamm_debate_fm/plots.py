@@ -139,10 +139,6 @@ def plot_all(
         output_path=output_path,
     )
 
-    # TODO: Add other plots (CV ROC curves, LODO ROC curves) if needed
-    # plot_cv_roc(all_roc_data, model_type=model, setup_order=setup_order)
-    # plot_lodo_roc(all_roc_data, model_type=model, setup_order=setup_order)
-
 
 def plot_roc_facet_clean(
     all_roc_data: dict,

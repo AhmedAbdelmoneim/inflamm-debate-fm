@@ -17,7 +17,6 @@ classifiers = [
 ]
 dependencies = [
     "anndata>=0.10.0",
-    "flytekit>=1.10.0",
     "GEOparse>=1.2.0",
     "gseapy>=1.1.10",
     "ipykernel>=7.1.0",

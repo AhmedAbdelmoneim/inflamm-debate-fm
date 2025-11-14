@@ -80,8 +80,6 @@ def add_ensembl_ids_exploded(
     Rows are exploded so each human-mouse pair may have multiple rows if
     multiple Ensembl IDs exist for either gene.
 
-    This function matches the notebook implementation exactly.
-
     Args:
         df: DataFrame with human and mouse Entrez IDs.
         human_col: Column name for human Entrez IDs.
@@ -95,7 +93,7 @@ def add_ensembl_ids_exploded(
     df = df.copy()
     mg = MyGeneInfo()
 
-    # --- Human mapping (exactly as in notebook) ---
+    # Human mapping
     human_ids = df[human_col].astype(str).tolist()
     h_res = mg.querymany(
         human_ids,
@@ -119,7 +117,7 @@ def add_ensembl_ids_exploded(
     m_map = m_res["ensembl.gene"].to_dict()
     df["mouse_ensembl"] = df[mouse_col].astype(str).map(m_map)
 
-    # Ensure list type for explode (exactly as in notebook)
+    # Ensure list type for explode
     df["human_ensembl"] = df["human_ensembl"].apply(
         lambda x: x if isinstance(x, list) else [x] if pd.notna(x) else []
     )
@@ -127,7 +125,7 @@ def add_ensembl_ids_exploded(
         lambda x: x if isinstance(x, list) else [x] if pd.notna(x) else []
     )
 
-    # Explode both dimensions (exactly as in notebook)
+    # Explode both dimensions
     df = df.explode("human_ensembl").explode("mouse_ensembl").reset_index(drop=True)
 
     return df
@@ -261,8 +259,6 @@ def add_symbols_to_human_adata(adata_human: ad.AnnData) -> ad.AnnData:
 def humanize_mouse_adata(adata_mouse: ad.AnnData, strict_map: pd.DataFrame) -> ad.AnnData:
     """Map mouse AnnData into human gene space using strict 1:1 orthologs.
 
-    This function matches the notebook implementation exactly.
-
     Args:
         adata_mouse: Mouse AnnData with mouse Ensembl IDs as var_names.
         strict_map: DataFrame with ['mouse_ensembl', 'human_ensembl', 'human_symbol'].
@@ -270,19 +266,19 @@ def humanize_mouse_adata(adata_mouse: ad.AnnData, strict_map: pd.DataFrame) -> a
     Returns:
         Mouse data in human gene space (strict orthologs only).
     """
-    # Keep only mouse genes in mapping (exactly as in notebook)
+    # Keep only mouse genes in mapping
     keep_mouse = adata_mouse.var.index.isin(strict_map["mouse_ensembl"])
     adata_mouse = adata_mouse[:, keep_mouse].copy()
 
-    # Build mapping dicts (exactly as in notebook)
+    # Build mapping dicts
     ens_map = dict(zip(strict_map["mouse_ensembl"], strict_map["human_ensembl"]))
     sym_map = dict(zip(strict_map["human_ensembl"], strict_map["human_symbol"]))
 
-    # Rename to human Ensembl IDs (exactly as in notebook)
+    # Rename to human Ensembl IDs
     adata_mouse.var["ensembl"] = adata_mouse.var.index.map(ens_map)
     adata_mouse.var_names = adata_mouse.var["ensembl"]
 
-    # Add human symbols (exactly as in notebook)
+    # Add human symbols
     adata_mouse.var["symbol"] = adata_mouse.var_names.map(sym_map)
 
     # Fill missing symbols with Ensembl IDs
@@ -290,7 +286,7 @@ def humanize_mouse_adata(adata_mouse: ad.AnnData, strict_map: pd.DataFrame) -> a
     missing_mask = adata_mouse.var["symbol"].isna()
     adata_mouse.var.loc[missing_mask, "symbol"] = adata_mouse.var_names[missing_mask]
 
-    # Drop duplicates just in case (exactly as in notebook)
+    # Drop duplicates
     adata_mouse = adata_mouse[:, ~adata_mouse.var_names.duplicated()].copy()
 
     return adata_mouse
@@ -299,7 +295,6 @@ def humanize_mouse_adata(adata_mouse: ad.AnnData, strict_map: pd.DataFrame) -> a
 def process_orthologs():
     """Process ortholog mapping for all AnnData files.
 
-    This function matches the notebook implementation exactly.
     Human datasets are kept as-is, mouse datasets are mapped to human gene space.
     """
     import anndata as ad

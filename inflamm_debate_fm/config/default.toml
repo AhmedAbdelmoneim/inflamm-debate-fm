@@ -62,28 +62,6 @@ orthology_dir = "external/mouse_orthology"
 rma_processed_dir = "interim/rma_brainarray_processed"
 anndata_raw_dir = "interim/anndata"
 
-[hpc]
-# Resource specifications for Flyte tasks
-[cpu_task]
-cpu = "2"
-memory = "4Gi"
-storage = "10Gi"
-timeout = "1h"
-
-[gpu_task]
-cpu = "4"
-memory = "16Gi"
-gpu = "1"
-storage = "20Gi"
-timeout = "4h"
-
-[embedding_task]
-cpu = "8"
-memory = "32Gi"
-gpu = "1"
-storage = "50Gi"
-timeout = "8h"
-
 [wandb]
 project = "inflamm-debate-fm"
 # entity is optional - set via environment variable WANDB_ENTITY if needed

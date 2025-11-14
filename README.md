@@ -6,78 +6,7 @@ Revisiting the mouse-human inflammation response debate using foundation models
 
 This project analyzes inflammation responses across human and mouse datasets using foundation models. It provides a modular pipeline for data preprocessing, embedding generation, probing experiments, and analysis.
 
-## Project Organization
-
-```
-├── Makefile           <- Makefile with convenience commands
-├── README.md          <- The top-level README for developers using this project
-├── Singularity.def    <- Apptainer container definition for HPC
-├── setup_hpc.sh       <- Setup script for Compute Canada HPC
-├── pyproject.toml     <- Project configuration file with package metadata
-├── data
-│   ├── external       <- Data from third party sources
-│   ├── interim        <- Intermediate data that has been transformed
-│   ├── processed      <- The final, canonical data sets for modeling
-│   │   ├── anndata_orthologs      <- AnnData files with ortholog mapping
-│   │   ├── bulkformer_embeddings  <- Pre-computed transcriptome embeddings
-│   │   └── anndata_combined       <- Combined human and mouse datasets
-│   └── raw            <- The original, immutable data dump
-│
-├── models             <- Trained and serialized models, model predictions, or model summaries
-│
-├── notebooks          <- Jupyter notebooks for exploratory analysis
-│
-├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
-│   └── figures        <- Generated graphics and figures to be used in reporting
-│
-└── inflamm_debate_fm  <- Source code for use in this project
-    │
-    ├── __init__.py
-    │
-    ├── cli.py                  <- Main command-line interface
-    ├── dataset.py              <- Data preprocessing orchestration
-    ├── plots.py                <- Visualization functions
-    │
-    ├── config/                 <- Configuration management
-    │   ├── __init__.py
-    │   ├── config.py           <- Configuration loading utilities
-    │   └── default.toml        <- Default configuration file
-    │
-    ├── data/                   <- Data loading and preprocessing
-    │   ├── __init__.py
-    │   ├── load.py             <- Data loading functions
-    │   ├── preprocessing.py    <- Data preprocessing functions
-    │   └── transforms.py       <- Data transformation functions
-    │
-    ├── embeddings/             <- Embedding generation and loading
-    │   ├── __init__.py
-    │   ├── generate.py         <- Embedding generation functions
-    │   └── load.py             <- Embedding loading functions
-    │
-    ├── modeling/               <- Modeling and evaluation
-    │   ├── __init__.py
-    │   ├── pipelines.py        <- Model pipeline definitions
-    │   ├── evaluation.py       <- Evaluation functions (CV, LODO, cross-species)
-    │   ├── coefficients.py     <- Coefficient extraction and analysis
-    │   ├── train.py            <- Training entry point
-    │   └── predict.py          <- Prediction entry point
-    │
-    ├── analysis/               <- Analysis functions
-    │   ├── __init__.py
-    │   ├── inflammation_vector.py <- Inflammation vector calculation
-    │   ├── dimensionality.py   <- Dimensionality analysis
-    │   └── gsea.py             <- GSEA analysis
-    │
-    └── utils/                  <- Utility functions
-        ├── __init__.py
-        ├── gene_utils.py       <- Gene utility functions
-        ├── io.py               <- I/O utility functions
-        └── wandb_utils.py      <- Wandb integration utilities
-```
-
 ## Installation
-
-### Local Development
 
 1. Clone the repository:
 ```bash
@@ -92,270 +21,40 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Sync dependencies
 make requirements
-# or
-uv sync
 ```
 
 3. Activate the virtual environment:
 ```bash
 source .venv/bin/activate  # Unix/macOS
-# or
-.venv\Scripts\activate  # Windows
 ```
 
-4. (Optional) Configure environment variables:
+4. (Optional) Configure environment variables in `.env`:
 ```bash
-# Copy the example .env file
+# Copy example if available
 cp .env.example .env
 
-# Edit .env and set your paths (e.g., for HPC with separate storage)
+# Edit .env to set paths (e.g., for HPC with separate storage)
 # INFLAMM_DEBATE_FM_DATA_ROOT=/path/to/large/data/directory
 # INFLAMM_DEBATE_FM_MODELS_ROOT=/path/to/models/directory
 ```
 
-### Compute Canada HPC Setup
-
-1. Load required modules:
-```bash
-module load apptainer
-module load python/3.13
-```
-
-2. Run the setup script:
-```bash
-./setup_hpc.sh
-```
-
-This will:
-- Build the Apptainer container image
-- Create necessary data directories
-- Set up environment variables
-- Create a wrapper script for running commands
-
-3. Use the wrapper script to run commands:
-```bash
-./run_apptainer.sh python -m inflamm_debate_fm.cli <command>
-```
-
-## Configuration
-
-Configuration is managed through TOML files. The default configuration is in `inflamm_debate_fm/config/default.toml`.
-
-### Key Configuration Sections
-
-- **`[time_cutoffs]`**: Time cutoffs for acute, subacute, and chronic inflammation classification
-- **`[model]`**: Model hyperparameters (random seed, CV folds, bootstraps)
-- **`[model.linear]`**: Linear model (Logistic Regression) parameters
-- **`[model.nonlinear]`**: Nonlinear model (SVM) parameters
-- **`[embedding]`**: Embedding model configuration
-- **`[analysis]`**: Analysis parameters (GSEA FDR threshold, top k genes, figure settings)
-- **`[paths]`**: Directory paths for data and outputs
-- **`[wandb]`**: Wandb configuration for experiment tracking
-
-### Environment Variable Configuration
-
-You can configure environment variables using a `.env` file in the project root directory. This is the recommended approach as it avoids needing to export variables every time.
-
-#### Using a .env File (Recommended)
-
-1. Copy the example file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` and set your values:
-   ```bash
-   # Data directory configuration
-   INFLAMM_DEBATE_FM_DATA_ROOT=/path/to/large/data/directory
-   
-   # Models directory configuration
-   INFLAMM_DEBATE_FM_MODELS_ROOT=/path/to/models/directory
-   
-   # Wandb configuration (optional)
-   WANDB_ENTITY=your-entity-name
-   WANDB_API_KEY=your-api-key
-   ```
-
-3. The `.env` file is automatically loaded when you run the CLI or import the package.
-
-**Note:** The `.env` file is git-ignored, so your local configuration won't be committed to the repository.
-
-#### Using Shell Environment Variables (Alternative)
-
-You can also set environment variables in your shell:
-
-```bash
-# Set custom data root directory (for large files, e.g., on HPC)
-export INFLAMM_DEBATE_FM_DATA_ROOT="/path/to/large/data/directory"
-
-# Set custom models root directory
-export INFLAMM_DEBATE_FM_MODELS_ROOT="/path/to/models/directory"
-
-# Override specific paths
-export INFLAMM_DEBATE_FM_ANN_DATA_DIR="/path/to/anndata"
-export INFLAMM_DEBATE_FM_EMBEDDINGS_DIR="/path/to/embeddings"
-```
-
-#### Available Environment Variables
-
-- **`INFLAMM_DEBATE_FM_DATA_ROOT`**: Root directory for data files (defaults to `<project_root>/data`)
-- **`INFLAMM_DEBATE_FM_MODELS_ROOT`**: Root directory for model files (defaults to `<project_root>/models`)
-- **`INFLAMM_DEBATE_FM_ANN_DATA_DIR`**: Directory for AnnData files
-- **`INFLAMM_DEBATE_FM_EMBEDDINGS_DIR`**: Directory for embeddings
-- **`INFLAMM_DEBATE_FM_COMBINED_DATA_DIR`**: Directory for combined data
-- **`WANDB_ENTITY`**: Wandb entity name (optional)
-- **`WANDB_API_KEY`**: Wandb API key (optional)
-
-**Note:** When setting `DATA_ROOT` or `MODELS_ROOT`, the internal subfolder structure remains the same, but the root location can be changed. This is useful for storing large data files on HPC systems with separate storage volumes.
-
-### Wandb Configuration
-
-Wandb can be configured via the `.env` file (recommended) or environment variables:
-
-**Using .env file (Recommended):**
-```bash
-# Add to .env file
-WANDB_ENTITY=your-entity-name
-WANDB_API_KEY=your-api-key
-```
-
-**Using environment variables:**
-```bash
-export WANDB_ENTITY="your-entity-name"
-export WANDB_API_KEY="your-api-key"
-```
-
 ## Quick Start
 
-### 1. Download Required Data and Models
+### Using Make Commands
+
+The easiest way to run the pipeline is using Make commands:
 
 ```bash
-# Download all required data and models (BulkFormer models from Zenodo, GEO datasets)
-python -m inflamm_debate_fm.cli download all
+# See all available commands
+make help
 
-# Or download individually:
-# Download BulkFormer models
-python -m inflamm_debate_fm.cli download models
+# Install dependencies
+make requirements
 
-# Download GEO datasets
-python -m inflamm_debate_fm.cli download geo --gse-id GSE37069
-```
-
-### 2. Preprocess GEO Data
-
-```bash
-# Preprocess a GEO dataset into AnnData format
-python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --gse-id GSE37069
-
-# Or use the dataset name (auto-detects GSE ID)
-python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --species human
-```
-
-### 3. Generate Embeddings
-
-```bash
-# Generate BulkFormer embeddings
-python -m inflamm_debate_fm.cli embed generate human_burn --device cuda --batch-size 256
-```
-
-### 4. Run Analysis
-
-```bash
-# Run within-species probing
-python -m inflamm_debate_fm.cli probe within-species --species human
-
-# Run cross-species probing
-python -m inflamm_debate_fm.cli probe cross-species
-
-# Analyze coefficients
-python -m inflamm_debate_fm.cli analyze coefficients
-
-# Run GSEA analysis
-python -m inflamm_debate_fm.cli analyze gsea
-
-# Generate plots
-python -m inflamm_debate_fm.cli plot within-species --species human
-python -m inflamm_debate_fm.cli plot cross-species
-```
-
-## Usage
-
-### Command-Line Interface
-
-The project provides a comprehensive CLI through `inflamm_debate_fm.cli`:
-
-#### Download Commands
-
-```bash
-# Download all required data and models
-python -m inflamm_debate_fm.cli download all
-
-# Download BulkFormer models from Zenodo
-python -m inflamm_debate_fm.cli download models
-
-# Download GEO dataset
-python -m inflamm_debate_fm.cli download geo --gse-id GSE37069
-```
-
-#### Preprocessing Commands
-
-```bash
-# Preprocess a GEO dataset
-python -m inflamm_debate_fm.cli preprocess gse --dataset-name human_burn --gse-id GSE37069
-
-# Run complete preprocessing pipeline
-python -m inflamm_debate_fm.cli preprocess all
-```
-
-#### Embedding Generation
-
-```bash
-# Generate BulkFormer embeddings
-python -m inflamm_debate_fm.cli embed generate <dataset_name> --model-name bulkformer --device cuda
-
-# With custom aggregation method
-python -m inflamm_debate_fm.cli embed generate human_burn --aggregate-type max --device cuda
-```
-
-#### Probing Commands
-
-```bash
-# Run within-species probing
-python -m inflamm_debate_fm.cli probe within-species --species human --use-wandb
-
-# Run cross-species probing
-python -m inflamm_debate_fm.cli probe cross-species --use-wandb
-```
-
-#### Analysis Commands
-
-```bash
-# Analyze coefficients
-python -m inflamm_debate_fm.cli analyze coefficients
-
-# Run GSEA analysis
-python -m inflamm_debate_fm.cli analyze gsea
-```
-
-#### Plotting Commands
-
-```bash
-# Generate plots for within-species results
-python -m inflamm_debate_fm.cli plot within-species --species human
-
-# Generate plots for cross-species results
-python -m inflamm_debate_fm.cli plot cross-species
-```
-
-### Makefile Commands
-
-For convenience, use the Makefile commands:
-
-```bash
-# Preprocess data
+# Process data (download, preprocess, map orthologs, combine)
 make data
 
-# Generate embeddings
+# Generate embeddings for a dataset
 make embed DATASET=human_burn
 
 # Run within-species probing
@@ -374,223 +73,62 @@ make analyze-gsea
 make plot-within SPECIES=human
 make plot-cross
 
-# Run full pipeline
-make pipeline
-
-# Run tests
-make test
+# Development commands
+make lint      # Check code style
+make format    # Format code
+make test      # Run tests
+make clean     # Remove compiled Python files
 ```
 
-### Python API
+### Pipeline Workflow
 
-You can also use the Python API directly:
+1. **Data Preprocessing**: `make data`
+2. **Embedding Generation**: `make embed DATASET=<dataset_name>`
+3. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
+4. **Coefficient Analysis**: `make analyze-coeffs`
+5. **GSEA Analysis**: `make analyze-gsea`
+6. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
 
-```python
-from inflamm_debate_fm.data.load import load_combined_adatas
-from inflamm_debate_fm.modeling.evaluation import evaluate_within_species
-from inflamm_debate_fm.data.transforms import transform_adata_to_X_y_all
+## Configuration
 
-# Load data
-combined_adatas = load_combined_adatas()
-human_adata = combined_adatas["human"]
+Configuration is managed through `inflamm_debate_fm/config/default.toml`. Key settings:
 
-# Define setups
-setups = [
-    ("All Inflammation vs. Control", transform_adata_to_X_y_all),
-    # ... other setups
-]
+- **`[time_cutoffs]`**: Time cutoffs for inflammation classification
+- **`[model]`**: Model hyperparameters (CV folds, random seed)
+- **`[paths]`**: Directory paths (can be overridden via environment variables)
+- **`[wandb]`**: Wandb configuration for experiment tracking (optional)
 
-# Run evaluation
-results, roc_data = evaluate_within_species(
-    adata=human_adata,
-    setups=setups,
-    species_name="Human",
-    n_cv_folds=10,
-    use_wandb=True,
-)
-```
-
-## Workflow
-
-1. **Data Preprocessing**: Load and preprocess AnnData files, combine datasets by species
-2. **Embedding Generation**: Generate transcriptome embeddings (if not pre-computed)
-3. **Probing Experiments**: Run within-species and cross-species probing experiments
-4. **Coefficient Analysis**: Extract and analyze model coefficients
-5. **GSEA Analysis**: Run Gene Set Enrichment Analysis on ranked coefficients
-6. **Visualization**: Generate plots for results
+Environment variables can be set in `.env` or exported:
+- `INFLAMM_DEBATE_FM_DATA_ROOT`: Root directory for data files
+- `INFLAMM_DEBATE_FM_MODELS_ROOT`: Root directory for model files
+- `WANDB_ENTITY` and `WANDB_API_KEY`: For experiment tracking (optional)
 
 ## HPC Usage (Compute Canada)
 
-### Building the Container
-
-**Recommended: Build directly on HPC**
-
-You can build the Apptainer container directly on Compute Canada HPC. This is the recommended approach:
-
+1. Load modules and run setup:
 ```bash
-# On a login node or compute node with Apptainer access
 module load apptainer
 ./setup_hpc.sh
 ```
 
-The `setup_hpc.sh` script will:
-- Check for Apptainer availability
-- Build the container image (`inflamm-debate-fm.sif`)
-- Create necessary directories
-- Set up the wrapper script (`run_apptainer.sh`)
-
-**Alternative: Build locally and transfer**
-
-If you prefer to build locally and transfer:
-
+2. Submit jobs using the flexible script:
 ```bash
-# On your local machine
-apptainer build inflamm-debate-fm.sif Singularity.def
-
-# Transfer to HPC (using scp, rsync, or your preferred method)
-scp inflamm-debate-fm.sif user@login.computecanada.ca:/path/to/project/
-```
-
-**Note:** Container images can be large (several GB), so building on HPC avoids large file transfers.
-
-### Submitting Jobs to the Queue
-
-The project includes flexible job submission scripts for running different pipeline steps on Compute Canada HPC.
-
-#### Using the Flexible Job Script
-
-The main `run_job.sh` script accepts any CLI command and can be customized with SLURM directives:
-
-```bash
-# Basic usage - submit any CLI command
 sbatch run_job.sh preprocess all
-sbatch run_job.sh embed generate human_burn --device cuda
+sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
 sbatch run_job.sh probe within-species --species human
-sbatch run_job.sh probe cross-species
-sbatch run_job.sh analyze coefficients
-sbatch run_job.sh analyze gsea
-sbatch run_job.sh plot within-species --species human
-
-# For GPU jobs (e.g., embeddings), add GPU resource
-sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
-
-# Customize resources inline
-sbatch --time=08:00:00 --mem=32G --cpus-per-task=8 run_job.sh <command>
 ```
 
-**Note:** Before using `run_job.sh`, edit it to set your Compute Canada account:
-```bash
-#SBATCH --account=def-<account>  # Replace <account> with your account name
-```
+See `jobs/README.md` for pre-configured job scripts.
 
-#### Using Pre-configured Job Scripts
+## Additional Resources
 
-For convenience, pre-configured job scripts are available in the `jobs/` directory:
-
-```bash
-# Data preprocessing
-sbatch jobs/preprocess.sh
-
-# Generate embeddings (requires GPU)
-sbatch jobs/embed.sh <dataset_name>
-# Example: sbatch jobs/embed.sh human_burn
-
-# Within-species probing
-sbatch jobs/probe_within.sh <species>
-# Example: sbatch jobs/probe_within.sh human
-
-# Cross-species probing
-sbatch jobs/probe_cross.sh
-
-# Coefficient analysis
-sbatch jobs/analyze_coeffs.sh
-
-# GSEA analysis
-sbatch jobs/analyze_gsea.sh
-```
-
-**Note:** Edit the job scripts in `jobs/` to set your Compute Canada account before use.
-
-#### GPU Support
-
-GPU support is automatically enabled when:
-1. The job requests a GPU via `--gres=gpu:1` in the SLURM script
-2. The command includes `--device cuda` flag
-
-The scripts automatically:
-- Detect GPU allocation via SLURM environment variables (`CUDA_VISIBLE_DEVICES`, `SLURM_GPUS_ON_NODE`)
-- Add the `--nv` flag to Apptainer for GPU access
-- Display GPU information in job logs
-
-**Example GPU usage:**
-```bash
-# Using the embed script (already configured for GPU)
-sbatch jobs/embed.sh human_burn
-
-# Using the flexible script with GPU
-sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
-
-# Requesting a specific GPU type on Compute Canada
-sbatch --gres=gpu:v100:1 run_job.sh embed generate human_burn --device cuda
-```
-
-#### Using the Wrapper Script Directly
-
-For interactive use on login nodes, the setup script creates a `run_apptainer.sh` wrapper:
-
-```bash
-./run_apptainer.sh python -m inflamm_debate_fm.cli probe within-species --species human
-```
-
-## Experiment Tracking
-
-The project integrates with Weights & Biases (Wandb) for experiment tracking. To use Wandb:
-
-1. Set your Wandb API key:
-```bash
-export WANDB_API_KEY="your-api-key"
-```
-
-2. Enable Wandb logging in commands:
-```bash
-python -m inflamm_debate_fm.cli probe within-species --species human --use-wandb
-```
-
-3. Configure Wandb in `inflamm_debate_fm/config/default.toml`:
-```toml
-[wandb]
-project = "inflamm-debate-fm"
-entity = "your-entity"  # or set via WANDB_ENTITY environment variable
-tags = ["research", "inflammation"]
-```
-
-## Data Format
-
-The project expects AnnData files with the following structure:
-- **`.X`**: Gene expression matrix (cells × genes)
-- **`.obs`**: Cell metadata including:
-  - `inflammation_category`: Inflammation category (control, acute, subacute, chronic)
-  - `timepoint_hours`: Time since injury in hours
-  - `dataset`: Dataset identifier
-  - `species`: Species (human or mouse)
-- **`.var`**: Gene metadata including:
-  - `gene_symbol`: Gene symbol
-  - `ensembl_id`: Ensembl gene ID
-- **`.obsm`**: Optional embedding matrices (e.g., `X_bulkformer`)
+- **CLI Usage**: Run `python -m inflamm_debate_fm.cli --help` for detailed CLI options
+- **Configuration**: See `inflamm_debate_fm/config/default.toml` for all configuration options
+- **HPC Jobs**: See `jobs/README.md` for HPC job submission details
 
 ## Contributing
 
-1. Install development dependencies
+1. Install development dependencies: `make requirements`
 2. Run linting: `make lint`
 3. Format code: `make format`
 4. Run tests: `make test`
-
-## License
-
-[Add your license here]
-
-## Citation
-
-[Add citation information here]
-
---------
