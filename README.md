@@ -19,9 +19,14 @@ cd inflamm-debate-fm
 # Install uv if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Sync dependencies
+# Sync dependencies (installs PyTorch 2.8.* with CUDA 12.9 and PyG optional dependencies)
 make requirements
 ```
+
+**Note:** This project uses Python 3.12.7 and PyTorch 2.8.* with CUDA 12.9 support. The `make requirements` command will:
+- Install PyTorch 2.8.* with CUDA 12.9 from PyTorch's wheel repository
+- Install torch-geometric and other dependencies
+- Install PyG optional dependencies (pyg_lib, torch_scatter, torch_sparse, torch_cluster, torch_spline_conv) from the PyG wheel repository
 
 3. Activate the virtual environment:
 ```bash
@@ -51,11 +56,17 @@ make help
 # Install dependencies
 make requirements
 
+# Set up BulkFormer model (clone repo and check for model files)
+make bulkformer-setup
+
 # Process data (download, preprocess, map orthologs, combine)
 make data
 
 # Generate embeddings for a dataset
 make embed DATASET=human_burn
+
+# Generate embeddings for all configurations (human-only, mouse-only, human-ortholog-filtered)
+make embed-all DEVICE=cuda USE_WANDB=true
 
 # Run within-species probing
 make probe-within SPECIES=human
@@ -82,12 +93,15 @@ make clean     # Remove compiled Python files
 
 ### Pipeline Workflow
 
-1. **Data Preprocessing**: `make data`
-2. **Embedding Generation**: `make embed DATASET=<dataset_name>`
-3. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
-4. **Coefficient Analysis**: `make analyze-coeffs`
-5. **GSEA Analysis**: `make analyze-gsea`
-6. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
+1. **BulkFormer Setup**: `make bulkformer-setup` (clone repo and verify model files)
+2. **Data Preprocessing**: `make data`
+3. **Embedding Generation**: 
+   - Single dataset: `make embed DATASET=<dataset_name>`
+   - All configurations: `make embed-all DEVICE=cuda` (generates human-only, mouse-only, and human-ortholog-filtered embeddings)
+4. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
+5. **Coefficient Analysis**: `make analyze-coeffs`
+6. **GSEA Analysis**: `make analyze-gsea`
+7. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
 
 ## Configuration
 
@@ -108,23 +122,46 @@ Environment variables can be set in `.env` or exported:
 1. Load modules and run setup:
 ```bash
 module load apptainer
-./setup_hpc.sh
+./hpc/setup_hpc.sh
 ```
 
-2. Submit jobs using the flexible script:
+2. Check CUDA versions (optional):
 ```bash
-sbatch run_job.sh preprocess all
-sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
-sbatch run_job.sh probe within-species --species human
+# List available CUDA module versions
+module avail cuda
+
+# Check GPU and driver information
+nvidia-smi
+
+# Check CUDA version if nvcc is available
+nvcc --version
 ```
 
-See `jobs/README.md` for pre-configured job scripts.
+3. Submit jobs using the flexible script:
+```bash
+# CPU jobs
+sbatch hpc/run_job.sh preprocess data
+
+# GPU jobs (CUDA is in the container, host CUDA module usually not needed)
+sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
+# For large datasets, use chunk-size to avoid OOM (processes samples in chunks)
+sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed all-configs --device cuda --batch-size 16 --chunk-size 2000 --use-wandb
+
+# If you need a specific CUDA module version on the host:
+CUDA_VERSION=12.9 sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
+
+# Other commands
+sbatch hpc/run_job.sh probe within-species --species human
+```
+
+**Note:** The container includes PyTorch with CUDA 12.9 support. The host CUDA module is typically not required, but you can load a specific version using the `CUDA_VERSION` environment variable if needed.
+
+
 
 ## Additional Resources
 
 - **CLI Usage**: Run `python -m inflamm_debate_fm.cli --help` for detailed CLI options
 - **Configuration**: See `inflamm_debate_fm/config/default.toml` for all configuration options
-- **HPC Jobs**: See `jobs/README.md` for HPC job submission details
 
 ## Contributing
 

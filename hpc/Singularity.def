@@ -1,0 +1,63 @@
+Bootstrap: docker
+From: python:3.12.7-slim
+
+%files
+    pyproject.toml /inflamm-debate-fm/
+    README.md /inflamm-debate-fm/
+    inflamm_debate_fm /inflamm-debate-fm/inflamm_debate_fm
+
+%post
+    # Update package lists and install system dependencies
+    apt-get update && apt-get install -y \
+        build-essential \
+        git \
+        curl \
+        ca-certificates \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install uv
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:$PATH"
+
+    # Set working directory
+    cd /inflamm-debate-fm
+
+    # Install PyTorch 2.8.* with CUDA 12.9 first (before installing other dependencies to ensure CUDA version)
+    echo "Installing PyTorch 2.8.* with CUDA 12.9..."
+    /root/.local/bin/uv pip install --system --index-url https://download.pytorch.org/whl/cu129 \
+        "torch>=2.8.0,<2.9.0" || echo "Warning: PyTorch installation failed."
+
+    # Install the package and all dependencies from pyproject.toml (in editable mode)
+    # This will install all dependencies. torch is already installed, so it should use that version.
+    echo "Installing package and dependencies from pyproject.toml..."
+    /root/.local/bin/uv pip install --system -e .
+
+    # Ensure torch is still the CUDA version
+    /root/.local/bin/uv pip install --system --index-url https://download.pytorch.org/whl/cu129 \
+        --upgrade-package torch "torch>=2.8.0,<2.9.0" || true
+
+    # Install PyG optional dependencies from wheel find-links (requires torch to be installed first)
+    echo "Installing PyG optional dependencies from wheel repository..."
+    /root/.local/bin/uv pip install --system --find-links https://data.pyg.org/whl/torch-2.8.0+cu129.html \
+        pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv || \
+        echo "Warning: Some PyG optional dependencies failed to install."
+
+    # Create data and model directories
+    mkdir -p /inflamm-debate-fm/data
+    mkdir -p /inflamm-debate-fm/models
+    mkdir -p /inflamm-debate-fm/reports
+
+%environment
+    export PATH="/root/.local/bin:$PATH"
+    export PYTHONPATH="/inflamm-debate-fm:$PYTHONPATH"
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    # Default command
+    exec python -m inflamm_debate_fm.cli "$@"
+
+%labels
+    Author "Ahmed Sallam"
+    Version "0.0.1"
+    Description "inflamm-debate-fm: Revisiting the mouse-human inflammation response debate using foundation models"
+

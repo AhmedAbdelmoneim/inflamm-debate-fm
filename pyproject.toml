@@ -35,16 +35,21 @@ dependencies = [
     "scikit-dimension>=0.3.4",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
-    "tomli>=2.0.0; python_version < '3.11'",
-    "torch>=2.0.0",
-    "torch-geometric>=2.0.0",
+    # PyTorch 2.8.* with CUDA 12.9 (installed with CUDA support in Makefile before uv sync)
+    "torch>=2.8.0,<2.9.0",
+    "torch-geometric",
+    # PyG optional dependencies (installed from wheel index in Makefile)
+    # These are listed here for documentation but installed separately via wheel index
     "tqdm",
     "typer",
     "wandb>=0.22.2",
     "xgboost>=3.1.1",
 ]
-requires-python = ">=3.10"
+requires-python = "==3.12.7"
 
+[tool.uv]
+# Enable preview features
+preview = true
 
 [tool.ruff]
 line-length = 99
