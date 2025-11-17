@@ -68,6 +68,7 @@ def generate_embeddings_for_config(
     batch_size: int = 256,
     filter_orthologs: bool = False,
     use_wandb: bool = False,
+    chunk_size: int | None = None,
 ) -> None:
     """Generate embeddings for a specific configuration.
 
@@ -79,6 +80,8 @@ def generate_embeddings_for_config(
         batch_size: Batch size for inference.
         filter_orthologs: If True, filter human datasets to ortholog genes only.
         use_wandb: If True, log to wandb.
+        chunk_size: Optional chunk size for processing large datasets. If provided,
+                    processes samples in chunks to reduce memory usage.
     """
     config = get_config()
     ann_data_dir = DATA_ROOT / config["paths"]["anndata_cleaned_dir"]
@@ -98,6 +101,7 @@ def generate_embeddings_for_config(
                     "device": device,
                     "batch_size": batch_size,
                     "filter_orthologs": filter_orthologs,
+                    "chunk_size": chunk_size,
                 },
             )
         except Exception as e:
@@ -123,26 +127,52 @@ def generate_embeddings_for_config(
             logger.warning(f"Dataset not found: {adata_path}, skipping...")
             continue
 
-        adata = ad.read_h5ad(adata_path)
-        logger.info(f"Loaded {dataset_name}: {adata.shape}")
+        # Load AnnData in backed mode to reduce memory usage
+        # This keeps data on disk and only loads into memory when accessed
+        # However, if we need to filter, we'll load into memory
+        load_backed = not (filter_orthologs and dataset_name.startswith("human"))
+
+        if load_backed:
+            try:
+                adata = ad.read_h5ad(adata_path, backed="r")
+                logger.info(f"Loaded {dataset_name} in backed mode: {adata.shape}")
+            except Exception:
+                # Fallback to normal loading if backed mode fails
+                adata = ad.read_h5ad(adata_path)
+                logger.info(f"Loaded {dataset_name}: {adata.shape}")
+        else:
+            # Load into memory if we need to filter
+            adata = ad.read_h5ad(adata_path)
+            logger.info(f"Loaded {dataset_name} into memory for filtering: {adata.shape}")
 
         # Filter to ortholog genes if requested
         if filter_orthologs and dataset_name.startswith("human"):
             adata = filter_to_ortholog_genes(adata, orthology_mapping)
 
-        # Generate embeddings
-        embeddings = extract_embeddings_from_adata(
+        # Determine output path
+        output_filename = f"{dataset_name}_{config_name}_embeddings.npy"
+        output_path = output_dir / output_filename
+
+        # Generate embeddings with incremental saving to disk
+        # This avoids accumulating all embeddings in memory
+        extract_embeddings_from_adata(
             adata=adata,
             model=model,
             device=device,
             batch_size=batch_size,
+            output_path=output_path,
+            chunk_size=chunk_size,
         )
 
-        # Save embeddings
-        output_filename = f"{dataset_name}_{config_name}_embeddings.npy"
-        output_path = output_dir / output_filename
-        np.save(output_path, embeddings)
-        logger.success(f"Saved embeddings to {output_path}")
+        # Load embedding shape for logging (without loading full array)
+        embedding_shape = None
+        if output_path.exists():
+            # Use memory-mapped loading to check shape without loading full array
+            embeddings_mmap = np.load(output_path, mmap_mode="r")
+            embedding_shape = embeddings_mmap.shape
+            del embeddings_mmap
+
+        logger.success(f"Saved embeddings to {output_path} (shape: {embedding_shape})")
 
         # Log to wandb
         if use_wandb and wandb_run:
@@ -151,10 +181,16 @@ def generate_embeddings_for_config(
                     "dataset": dataset_name,
                     "n_samples": adata.shape[0],
                     "n_genes": adata.shape[1],
-                    "embedding_shape": embeddings.shape,
+                    "embedding_shape": embedding_shape,
                 },
                 prefix=f"{config_name}/{dataset_name}",
             )
+
+        # Clear adata to free memory before next dataset
+        del adata
+        import gc
+
+        gc.collect()
 
     # Log completion
     if use_wandb and wandb_run:
@@ -171,6 +207,7 @@ def generate_all_embeddings(
     device: str = "cpu",
     batch_size: int = 256,
     use_wandb: bool = False,
+    chunk_size: int | None = None,
 ) -> None:
     """Generate embeddings for all configurations.
 
@@ -179,6 +216,9 @@ def generate_all_embeddings(
         device: Device to run inference on.
         batch_size: Batch size for inference.
         use_wandb: If True, log to wandb.
+        chunk_size: Optional chunk size for processing large datasets. If provided,
+                    processes samples in chunks to reduce memory usage. Recommended
+                    value: 1000-5000 samples per chunk depending on available memory.
     """
     output_base_dir = Path(output_base_dir)
 
@@ -193,6 +233,7 @@ def generate_all_embeddings(
         device=device,
         batch_size=batch_size,
         use_wandb=use_wandb,
+        chunk_size=chunk_size,
     )
 
     # Configuration 2: Mouse datasets only
@@ -206,6 +247,7 @@ def generate_all_embeddings(
         device=device,
         batch_size=batch_size,
         use_wandb=use_wandb,
+        chunk_size=chunk_size,
     )
 
     # Configuration 3: Human datasets filtered to ortholog genes
@@ -220,6 +262,7 @@ def generate_all_embeddings(
         batch_size=batch_size,
         filter_orthologs=True,
         use_wandb=use_wandb,
+        chunk_size=chunk_size,
     )
 
     logger.success("All embedding configurations completed!")

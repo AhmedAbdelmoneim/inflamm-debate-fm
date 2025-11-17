@@ -144,7 +144,8 @@ sbatch hpc/run_job.sh preprocess data
 
 # GPU jobs (CUDA is in the container, host CUDA module usually not needed)
 sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
-sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed all-configs --device cuda --batch-size 16 --use-wandb
+# For large datasets, use chunk-size to avoid OOM (processes samples in chunks)
+sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed all-configs --device cuda --batch-size 16 --chunk-size 2000 --use-wandb
 
 # If you need a specific CUDA module version on the host:
 CUDA_VERSION=12.9 sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda

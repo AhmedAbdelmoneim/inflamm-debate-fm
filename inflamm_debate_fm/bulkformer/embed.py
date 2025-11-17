@@ -1,6 +1,7 @@
 """BulkFormer embedding extraction functions."""
 
 from collections import OrderedDict
+from pathlib import Path
 import sys
 
 import anndata as ad
@@ -36,6 +37,44 @@ except ImportError as e:
         "Run 'make bulkformer-setup' to set up BulkFormer."
     )
     raise
+
+
+def estimate_memory_usage(
+    n_samples: int, n_genes: int, batch_size: int, embedding_dim: int = 512
+) -> dict[str, float]:
+    """Estimate memory usage for embedding generation.
+
+    Args:
+        n_samples: Number of samples to process.
+        n_genes: Number of genes (after alignment to BulkFormer).
+        batch_size: Batch size for inference.
+        embedding_dim: Embedding dimension (default 512 for BulkFormer).
+
+    Returns:
+        Dictionary with memory estimates in GB for different components.
+    """
+    # Expression array memory (float32)
+    expr_memory_gb = (n_samples * n_genes * 4) / (1024**3)
+
+    # Embedding output memory (float32)
+    embedding_memory_gb = (n_samples * n_genes * embedding_dim * 4) / (1024**3)
+
+    # Batch processing memory (one batch at a time)
+    batch_expr_memory_gb = (batch_size * n_genes * 4) / (1024**3)
+    batch_embedding_memory_gb = (batch_size * n_genes * embedding_dim * 4) / (1024**3)
+
+    # Model memory (rough estimate, actual depends on model architecture)
+    model_memory_gb = 2.0  # Approximate for BulkFormer
+
+    return {
+        "expression_array": expr_memory_gb,
+        "embedding_output": embedding_memory_gb,
+        "batch_expression": batch_expr_memory_gb,
+        "batch_embedding": batch_embedding_memory_gb,
+        "model": model_memory_gb,
+        "total_peak": batch_expr_memory_gb + batch_embedding_memory_gb + model_memory_gb,
+        "total_if_accumulated": expr_memory_gb + embedding_memory_gb + model_memory_gb,
+    }
 
 
 def load_bulkformer_model(device: str = "cpu") -> torch.nn.Module:
@@ -162,7 +201,8 @@ def extract_embeddings(
     expr_array: np.ndarray,
     device: str = "cpu",
     batch_size: int = 256,
-) -> np.ndarray:
+    output_path: Path | None = None,
+) -> np.ndarray | None:
     """Extract gene-level embeddings from BulkFormer model.
 
     This function extracts embeddings without filtering or aggregation.
@@ -173,12 +213,18 @@ def extract_embeddings(
         expr_array: Expression array of shape [N_samples, N_genes].
         device: Device to run inference on.
         batch_size: Batch size for inference.
+        output_path: Optional path to save embeddings incrementally. If provided,
+                     embeddings are saved to disk and None is returned. Otherwise,
+                     embeddings are returned as numpy array.
 
     Returns:
-        Embeddings array of shape [N_samples, N_genes, embedding_dim].
+        Embeddings array of shape [N_samples, N_genes, embedding_dim] if output_path is None,
+        otherwise None (embeddings saved to disk).
     """
     device_obj = torch.device(device)
     model.eval()
+
+    n_samples = expr_array.shape[0]
 
     # For GPU, check available memory and warn if low
     if device_obj.type == "cuda":
@@ -201,31 +247,102 @@ def extract_embeddings(
         dataset = TensorDataset(expr_tensor)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-    all_emb_list = []
-    with torch.no_grad():
-        for batch_idx, (X,) in enumerate(
-            tqdm(dataloader, total=len(dataloader), desc="Extracting embeddings")
-        ):
-            X = X.to(device_obj)
-            output, emb = model(X, [2])
-            # Extract embeddings from layer 2 (gene-level)
-            emb = emb[2].detach().cpu().numpy()
-            all_emb_list.append(emb)
-
-            # Clear GPU cache after each batch to avoid fragmentation
+    # If saving to disk, use memory-mapped array for incremental writes
+    if output_path is not None:
+        # Process first batch to determine embedding dimensions
+        first_batch = next(iter(dataloader))[0]
+        with torch.no_grad():
+            first_batch = first_batch.to(device_obj)
+            _, emb = model(first_batch, [2])
+            emb_shape = emb[2].shape  # [batch_size, n_genes, embedding_dim]
+            embedding_dim = emb_shape[-1]
+            n_genes = emb_shape[-2]
+            # Clean up first batch
+            del first_batch, emb
             if device_obj.type == "cuda":
-                del X, output
                 torch.cuda.empty_cache()
 
-                # Log memory usage every 10 batches
-                if (batch_idx + 1) % 10 == 0:
-                    allocated = torch.cuda.memory_allocated(0) / (1024**3)
-                    reserved = torch.cuda.memory_reserved(0) / (1024**3)
-                    logger.debug(
-                        f"Batch {batch_idx + 1}: GPU memory allocated={allocated:.2f} GB, reserved={reserved:.2f} GB"
-                    )
+        # Create memory-mapped array for incremental writes
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            f"Creating memory-mapped array at {output_path} for shape ({n_samples}, {n_genes}, {embedding_dim})"
+        )
 
-    return np.vstack(all_emb_list)
+        # Use temporary file first, then move to final location
+        temp_path = output_path.with_suffix(".tmp.npy")
+        mmap_array = np.lib.format.open_memmap(
+            temp_path, mode="w+", dtype=np.float32, shape=(n_samples, n_genes, embedding_dim)
+        )
+
+        # Reset dataloader to process from beginning
+        dataloader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=False, pin_memory=(device_obj.type == "cuda")
+        )
+
+        sample_idx = 0
+        with torch.no_grad():
+            for batch_idx, (X,) in enumerate(
+                tqdm(dataloader, total=len(dataloader), desc="Extracting embeddings")
+            ):
+                X = X.to(device_obj)
+                output, emb = model(X, [2])
+                # Extract embeddings from layer 2 (gene-level)
+                emb = emb[2].detach().cpu().numpy()
+
+                # Write batch to memory-mapped array
+                batch_size_actual = emb.shape[0]
+                mmap_array[sample_idx : sample_idx + batch_size_actual] = emb
+                sample_idx += batch_size_actual
+
+                # Clear GPU cache after each batch to avoid fragmentation
+                if device_obj.type == "cuda":
+                    del X, output, emb
+                    torch.cuda.empty_cache()
+
+                    # Log memory usage every 10 batches
+                    if (batch_idx + 1) % 10 == 0:
+                        allocated = torch.cuda.memory_allocated(0) / (1024**3)
+                        reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                        logger.debug(
+                            f"Batch {batch_idx + 1}: GPU memory allocated={allocated:.2f} GB, reserved={reserved:.2f} GB"
+                        )
+                else:
+                    del emb
+
+        # Flush and close memory-mapped array
+        del mmap_array
+        # Move temp file to final location
+        temp_path.rename(output_path)
+        logger.success(f"Saved embeddings to {output_path}")
+        return None
+    else:
+        # Original behavior: accumulate in memory
+        all_emb_list = []
+        with torch.no_grad():
+            for batch_idx, (X,) in enumerate(
+                tqdm(dataloader, total=len(dataloader), desc="Extracting embeddings")
+            ):
+                X = X.to(device_obj)
+                output, emb = model(X, [2])
+                # Extract embeddings from layer 2 (gene-level)
+                emb = emb[2].detach().cpu().numpy()
+                all_emb_list.append(emb)
+
+                # Clear GPU cache after each batch to avoid fragmentation
+                if device_obj.type == "cuda":
+                    del X, output
+                    torch.cuda.empty_cache()
+
+                    # Log memory usage every 10 batches
+                    if (batch_idx + 1) % 10 == 0:
+                        allocated = torch.cuda.memory_allocated(0) / (1024**3)
+                        reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                        logger.debug(
+                            f"Batch {batch_idx + 1}: GPU memory allocated={allocated:.2f} GB, reserved={reserved:.2f} GB"
+                        )
+
+        return np.vstack(all_emb_list)
 
 
 def extract_embeddings_from_adata(
@@ -233,7 +350,9 @@ def extract_embeddings_from_adata(
     model: torch.nn.Module | None = None,
     device: str = "cpu",
     batch_size: int = 256,
-) -> np.ndarray:
+    output_path: Path | None = None,
+    chunk_size: int | None = None,
+) -> np.ndarray | None:
     """Extract BulkFormer embeddings from an AnnData object.
 
     Args:
@@ -241,9 +360,16 @@ def extract_embeddings_from_adata(
         model: Pre-loaded BulkFormer model. If None, will load it.
         device: Device to run inference on.
         batch_size: Batch size for inference.
+        output_path: Optional path to save embeddings incrementally. If provided,
+                     embeddings are saved to disk and None is returned. Otherwise,
+                     embeddings are returned as numpy array.
+        chunk_size: Optional chunk size for processing large datasets. If provided,
+                    processes samples in chunks to reduce memory usage. Only used
+                    when output_path is provided.
 
     Returns:
-        Embeddings array of shape [N_samples, N_genes, embedding_dim].
+        Embeddings array of shape [N_samples, N_genes, embedding_dim] if output_path is None,
+        otherwise None (embeddings saved to disk).
     """
     if model is None:
         model = load_bulkformer_model(device=device)
@@ -257,17 +383,150 @@ def extract_embeddings_from_adata(
         else:
             adata.var["ensembl_id"] = adata.var.index
 
+    # Process in chunks if requested and output_path is provided
+    if chunk_size is not None and output_path is not None and adata.shape[0] > chunk_size:
+        logger.info(f"Processing {adata.shape[0]} samples in chunks of {chunk_size}")
+        return _extract_embeddings_chunked(
+            adata=adata,
+            model=model,
+            gene_data=gene_data,
+            device=device,
+            batch_size=batch_size,
+            output_path=output_path,
+            chunk_size=chunk_size,
+        )
+
+    # Process entire dataset
     expr_df = adata_to_dataframe(adata)
     aligned_df, var = align_genes_to_bulkformer(expr_df, gene_data["bulkformer_gene_list"])
 
     logger.info(f"Aligned expression matrix: {expr_df.shape} -> {aligned_df.shape}")
+
+    # Estimate memory usage and warn if high
+    if output_path is None:
+        # Only estimate if we're accumulating in memory
+        mem_estimate = estimate_memory_usage(
+            n_samples=aligned_df.shape[0],
+            n_genes=aligned_df.shape[1],
+            batch_size=batch_size,
+        )
+        if mem_estimate["total_if_accumulated"] > 10.0:
+            logger.warning(
+                f"Estimated memory usage: {mem_estimate['total_if_accumulated']:.2f} GB. "
+                f"Consider using --chunk-size or output_path to avoid OOM."
+            )
+
+    # Clear intermediate dataframes to free memory
+    del expr_df
+    import gc
+
+    gc.collect()
 
     embeddings = extract_embeddings(
         model=model,
         expr_array=aligned_df.values,
         device=device,
         batch_size=batch_size,
+        output_path=output_path,
     )
 
-    logger.success(f"Generated BulkFormer embeddings: {embeddings.shape}")
+    # Clear aligned_df after use
+    del aligned_df
+    gc.collect()
+
+    if embeddings is not None:
+        logger.success(f"Generated BulkFormer embeddings: {embeddings.shape}")
     return embeddings
+
+
+def _extract_embeddings_chunked(
+    adata: ad.AnnData,
+    model: torch.nn.Module,
+    gene_data: dict,
+    device: str,
+    batch_size: int,
+    output_path: Path,
+    chunk_size: int,
+) -> None:
+    """Extract embeddings in chunks for memory efficiency.
+
+    Args:
+        adata: AnnData object with 'ensembl_id' in var.
+        model: Pre-loaded BulkFormer model.
+        gene_data: Dictionary with 'bulkformer_gene_list' and 'gene_length_dict'.
+        device: Device to run inference on.
+        batch_size: Batch size for inference.
+        output_path: Path to save embeddings.
+        chunk_size: Number of samples to process per chunk.
+    """
+    n_samples = adata.shape[0]
+    output_path = Path(output_path)
+
+    # Process first chunk to determine dimensions
+    first_chunk = adata[: min(chunk_size, n_samples)]
+    expr_df = adata_to_dataframe(first_chunk)
+    aligned_df, _ = align_genes_to_bulkformer(expr_df, gene_data["bulkformer_gene_list"])
+
+    # Get embedding dimensions from first batch
+    device_obj = torch.device(device)
+    test_tensor = torch.tensor(aligned_df.values[:batch_size], dtype=torch.float32)
+    with torch.no_grad():
+        test_tensor = test_tensor.to(device_obj)
+        _, emb = model(test_tensor, [2])
+        emb_shape = emb[2].shape
+        embedding_dim = emb_shape[-1]
+        n_genes = emb_shape[-2]
+
+    del test_tensor, emb, aligned_df, expr_df, first_chunk
+    if device_obj.type == "cuda":
+        torch.cuda.empty_cache()
+    import gc
+
+    gc.collect()
+
+    # Create memory-mapped array for all samples
+    temp_path = output_path.with_suffix(".tmp.npy")
+    logger.info(
+        f"Creating memory-mapped array at {output_path} for shape ({n_samples}, {n_genes}, {embedding_dim})"
+    )
+    mmap_array = np.lib.format.open_memmap(
+        temp_path, mode="w+", dtype=np.float32, shape=(n_samples, n_genes, embedding_dim)
+    )
+
+    # Process in chunks
+    sample_idx = 0
+    for chunk_start in range(0, n_samples, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, n_samples)
+        logger.info(
+            f"Processing chunk {chunk_start}:{chunk_end} ({chunk_end - chunk_start} samples)"
+        )
+
+        # Extract chunk
+        chunk_adata = adata[chunk_start:chunk_end]
+        expr_df = adata_to_dataframe(chunk_adata)
+        aligned_df, _ = align_genes_to_bulkformer(expr_df, gene_data["bulkformer_gene_list"])
+
+        # Generate embeddings for chunk
+        chunk_embeddings = extract_embeddings(
+            model=model,
+            expr_array=aligned_df.values,
+            device=device,
+            batch_size=batch_size,
+            output_path=None,  # Return array, don't save
+        )
+
+        # Write to memory-mapped array
+        chunk_size_actual = chunk_embeddings.shape[0]
+        mmap_array[sample_idx : sample_idx + chunk_size_actual] = chunk_embeddings
+        sample_idx += chunk_size_actual
+
+        # Clear chunk data
+        del chunk_adata, expr_df, aligned_df, chunk_embeddings
+        gc.collect()
+        if device_obj.type == "cuda":
+            torch.cuda.empty_cache()
+
+    # Flush and close
+    del mmap_array
+    temp_path.rename(output_path)
+    logger.success(f"Saved chunked embeddings to {output_path}")
