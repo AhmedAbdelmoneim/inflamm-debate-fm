@@ -142,7 +142,11 @@ def adata_to_dataframe(adata: ad.AnnData) -> pd.DataFrame:
         DataFrame with samples as rows and genes (ensembl_id) as columns.
     """
     if "ensembl_id" not in adata.var.columns:
-        adata.var["ensembl_id"] = adata.var.index
+        # Try to use 'ensembl' column if available (from cleaned files)
+        if "ensembl" in adata.var.columns:
+            adata.var["ensembl_id"] = adata.var["ensembl"]
+        else:
+            adata.var["ensembl_id"] = adata.var.index
 
     df = pd.DataFrame(
         adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X,
@@ -173,20 +177,53 @@ def extract_embeddings(
     Returns:
         Embeddings array of shape [N_samples, N_genes, embedding_dim].
     """
-    device = torch.device(device)
+    device_obj = torch.device(device)
     model.eval()
-    expr_tensor = torch.tensor(expr_array, dtype=torch.float32, device=device)
-    dataset = TensorDataset(expr_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    # For GPU, check available memory and warn if low
+    if device_obj.type == "cuda":
+        if torch.cuda.is_available():
+            free_mem = torch.cuda.get_device_properties(
+                0
+            ).total_memory - torch.cuda.memory_allocated(0)
+            free_gb = free_mem / (1024**3)
+            logger.info(f"GPU memory: {free_gb:.2f} GB free")
+            if free_gb < 2.0:
+                logger.warning(
+                    f"Low GPU memory ({free_gb:.2f} GB free). "
+                    f"Consider using a smaller batch_size (current: {batch_size})"
+                )
+        # Keep data on CPU and move batches to GPU to save memory
+        dataset = TensorDataset(torch.tensor(expr_array, dtype=torch.float32))
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
+    else:
+        expr_tensor = torch.tensor(expr_array, dtype=torch.float32, device=device_obj)
+        dataset = TensorDataset(expr_tensor)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     all_emb_list = []
     with torch.no_grad():
-        for (X,) in tqdm(dataloader, total=len(dataloader), desc="Extracting embeddings"):
-            X = X.to(device)
+        for batch_idx, (X,) in enumerate(
+            tqdm(dataloader, total=len(dataloader), desc="Extracting embeddings")
+        ):
+            X = X.to(device_obj)
             output, emb = model(X, [2])
             # Extract embeddings from layer 2 (gene-level)
             emb = emb[2].detach().cpu().numpy()
             all_emb_list.append(emb)
+
+            # Clear GPU cache after each batch to avoid fragmentation
+            if device_obj.type == "cuda":
+                del X, output
+                torch.cuda.empty_cache()
+
+                # Log memory usage every 10 batches
+                if (batch_idx + 1) % 10 == 0:
+                    allocated = torch.cuda.memory_allocated(0) / (1024**3)
+                    reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                    logger.debug(
+                        f"Batch {batch_idx + 1}: GPU memory allocated={allocated:.2f} GB, reserved={reserved:.2f} GB"
+                    )
 
     return np.vstack(all_emb_list)
 
@@ -214,7 +251,11 @@ def extract_embeddings_from_adata(
     gene_data = load_bulkformer_gene_data()
 
     if "ensembl_id" not in adata.var.columns:
-        adata.var["ensembl_id"] = adata.var.index
+        # Try to use 'ensembl' column if available (from cleaned files)
+        if "ensembl" in adata.var.columns:
+            adata.var["ensembl_id"] = adata.var["ensembl"]
+        else:
+            adata.var["ensembl_id"] = adata.var.index
 
     expr_df = adata_to_dataframe(adata)
     aligned_df, var = align_genes_to_bulkformer(expr_df, gene_data["bulkformer_gene_list"])

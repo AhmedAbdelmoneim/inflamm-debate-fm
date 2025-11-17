@@ -71,29 +71,52 @@ bulkformer-setup: requirements
 ## Generate embeddings for a dataset
 .PHONY: embed
 embed: requirements
-	@echo "Usage: make embed DATASET=<dataset_name> [DEVICE=<cpu|cuda>] [BATCH_SIZE=<256>]"
+	@echo "Usage: make embed DATASET=<dataset_name> [DEVICE=<cpu|cuda>] [BATCH_SIZE=<16>]"
+	@echo "Note: For GPU (especially MIG instances), use smaller BATCH_SIZE (e.g., 8-16) to avoid OOM errors"
 	@if [ -z "$(DATASET)" ]; then \
 		echo "Error: DATASET variable is required"; \
-		echo "Example: make embed DATASET=human_burn"; \
+		echo "Example: make embed DATASET=human_burn DEVICE=cuda BATCH_SIZE=16"; \
 		exit 1; \
 	fi
-	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed generate $(DATASET) \
-		--device $(or $(DEVICE),cpu) \
-		--batch-size $(or $(BATCH_SIZE),256)
+	@# Set PyTorch CUDA allocator config to reduce fragmentation
+	@if [ "$(or $(DEVICE),cpu)" = "cuda" ]; then \
+		PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed generate $(DATASET) \
+			--device $(or $(DEVICE),cpu) \
+			--batch-size $(or $(BATCH_SIZE),16); \
+	else \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed generate $(DATASET) \
+			--device $(or $(DEVICE),cpu) \
+			--batch-size $(or $(BATCH_SIZE),256); \
+	fi
 
 ## Generate embeddings for all configurations (human-only, mouse-only, human-ortholog-filtered)
 .PHONY: embed-all
 embed-all: requirements
-	@echo "Usage: make embed-all [DEVICE=<cpu|cuda>] [BATCH_SIZE=<256>] [USE_WANDB=<true|false>]"
+	@echo "Usage: make embed-all [DEVICE=<cpu|cuda>] [BATCH_SIZE=<16>] [USE_WANDB=<true|false>]"
+	@echo "Note: For GPU (especially MIG instances), use smaller BATCH_SIZE (e.g., 8-16) to avoid OOM errors"
+	@# Set PyTorch CUDA allocator config to reduce fragmentation
 	@if [ "$(USE_WANDB)" = "true" ]; then \
-		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
-			--device $(or $(DEVICE),cpu) \
-			--batch-size $(or $(BATCH_SIZE),256) \
-			--use-wandb; \
+		if [ "$(or $(DEVICE),cpu)" = "cuda" ]; then \
+			PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
+				--device cuda \
+				--batch-size $(or $(BATCH_SIZE),16) \
+				--use-wandb; \
+		else \
+			$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
+				--device cpu \
+				--batch-size $(or $(BATCH_SIZE),256) \
+				--use-wandb; \
+		fi; \
 	else \
-		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
-			--device $(or $(DEVICE),cpu) \
-			--batch-size $(or $(BATCH_SIZE),256); \
+		if [ "$(or $(DEVICE),cpu)" = "cuda" ]; then \
+			PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
+				--device cuda \
+				--batch-size $(or $(BATCH_SIZE),16); \
+		else \
+			$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed all-configs \
+				--device cpu \
+				--batch-size $(or $(BATCH_SIZE),256); \
+		fi; \
 	fi
 
 ## Run within-species probing experiments

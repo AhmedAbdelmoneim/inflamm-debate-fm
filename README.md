@@ -122,29 +122,45 @@ Environment variables can be set in `.env` or exported:
 1. Load modules and run setup:
 ```bash
 module load apptainer
-./setup_hpc.sh
+./hpc/setup_hpc.sh
 ```
 
-2. Submit jobs using the flexible script:
+2. Check CUDA versions (optional):
 ```bash
-sbatch run_job.sh preprocess data
-sbatch --gres=gpu:1 run_job.sh embed generate human_burn --device cuda
-sbatch --gres=gpu:1 run_job.sh embed all-configs --device cuda --use-wandb
-sbatch run_job.sh probe within-species --species human
+# List available CUDA module versions
+module avail cuda
+
+# Check GPU and driver information
+nvidia-smi
+
+# Check CUDA version if nvcc is available
+nvcc --version
 ```
 
-Or use pre-configured job scripts:
+3. Submit jobs using the flexible script:
 ```bash
-sbatch jobs/embed_all.sh USE_WANDB=true
+# CPU jobs
+sbatch hpc/run_job.sh preprocess data
+
+# GPU jobs (CUDA is in the container, host CUDA module usually not needed)
+sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
+sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed all-configs --device cuda --batch-size 16 --use-wandb
+
+# If you need a specific CUDA module version on the host:
+CUDA_VERSION=12.9 sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
+
+# Other commands
+sbatch hpc/run_job.sh probe within-species --species human
 ```
 
-See `jobs/README.md` for pre-configured job scripts.
+**Note:** The container includes PyTorch with CUDA 12.9 support. The host CUDA module is typically not required, but you can load a specific version using the `CUDA_VERSION` environment variable if needed.
+
+
 
 ## Additional Resources
 
 - **CLI Usage**: Run `python -m inflamm_debate_fm.cli --help` for detailed CLI options
 - **Configuration**: See `inflamm_debate_fm/config/default.toml` for all configuration options
-- **HPC Jobs**: See `jobs/README.md` for HPC job submission details
 
 ## Contributing
 

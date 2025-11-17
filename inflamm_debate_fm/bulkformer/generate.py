@@ -99,7 +99,11 @@ def align_genes_to_bulkformer(expr_df: pd.DataFrame, bulkformer_gene_list: list)
 def adata_to_dataframe(adata: ad.AnnData) -> pd.DataFrame:
     """Convert AnnData to DataFrame with Ensembl IDs as columns."""
     if "ensembl_id" not in adata.var.columns:
-        adata.var["ensembl_id"] = adata.var.index
+        # Try to use 'ensembl' column if available (from cleaned files)
+        if "ensembl" in adata.var.columns:
+            adata.var["ensembl_id"] = adata.var["ensembl"]
+        else:
+            adata.var["ensembl_id"] = adata.var.index
     df = pd.DataFrame(
         adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X,
         index=adata.obs_names,
@@ -163,7 +167,11 @@ def generate_bulkformer_embeddings(
     gene_data = load_bulkformer_gene_data()
 
     if "ensembl_id" not in adata.var.columns:
-        adata.var["ensembl_id"] = adata.var.index
+        # Try to use 'ensembl' column if available (from cleaned files)
+        if "ensembl" in adata.var.columns:
+            adata.var["ensembl_id"] = adata.var["ensembl"]
+        else:
+            adata.var["ensembl_id"] = adata.var.index
 
     expr_df = adata_to_dataframe(adata)
     aligned_df = align_genes_to_bulkformer(expr_df, gene_data["bulkformer_gene_list"])

@@ -155,6 +155,61 @@ def get_strict_orthologs(orthologs_df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def load_orthology_mapping_simple() -> pd.DataFrame:
+    """Load mouse-to-human orthology mapping using only HMD and MGI files (no API calls).
+
+    This version uses gene symbols for matching, avoiding the need for Ensembl ID lookups.
+
+    Returns:
+        DataFrame with columns ['human_symbol', 'human_entrez', 'mouse_entrez'].
+        Contains mouse->human ortholog pairs without Ensembl IDs.
+    """
+    hmd_file = ORTHOLOGY_DIR / "HMD_HumanPhenotype.rpt"
+    mgi_file = ORTHOLOGY_DIR / "MGI_EntrezGene.rpt"
+
+    logger.info("Loading orthology mapping from HMD and MGI files (no API calls)...")
+    # HMD file: columns 0-3 are human_symbol, human_entrez, mouse_symbol, mouse_mgi
+    hmd = pd.read_csv(
+        hmd_file,
+        sep="\t",
+        header=None,
+        usecols=[0, 1, 2, 3],
+        names=["human_symbol", "human_entrez", "mouse_symbol", "mouse_mgi"],
+        dtype=str,
+        low_memory=False,
+    )
+    # MGI file: column 0 = MGI ID, column 1 = symbol, column 2 = type, column 8 = Entrez ID
+    # Filter to only type "O" (official) entries which have Entrez IDs
+    mgi = pd.read_csv(
+        mgi_file,
+        sep="\t",
+        header=None,
+        usecols=[0, 1, 2, 8],
+        names=["mgi_id", "mouse_symbol", "type", "mouse_entrez"],
+        dtype=str,
+        low_memory=False,
+    )
+
+    # Clean up data before merge
+    hmd = hmd.dropna(subset=["mouse_mgi", "human_entrez", "human_symbol"])
+    # Filter MGI to only official entries with Entrez IDs
+    mgi = mgi[(mgi["type"] == "O") & mgi["mouse_entrez"].notna()].copy()
+    mgi = mgi[["mgi_id", "mouse_symbol", "mouse_entrez"]].drop_duplicates(subset="mgi_id")
+
+    # Merge on MGI ID
+    mapping = hmd.merge(mgi, left_on="mouse_mgi", right_on="mgi_id", how="inner")
+
+    # Select final columns and clean
+    mapping = mapping[["mouse_entrez", "human_entrez", "human_symbol"]].copy()
+    mapping = mapping.dropna(
+        subset=["mouse_entrez", "human_entrez", "human_symbol"]
+    ).drop_duplicates()
+
+    logger.info(f"Loaded {len(mapping)} mouse->human ortholog pairs (Entrez IDs and symbols)")
+
+    return mapping
+
+
 def load_orthology_mapping() -> pd.DataFrame:
     """Load mouse-to-human orthology mapping with Ensembl IDs.
 

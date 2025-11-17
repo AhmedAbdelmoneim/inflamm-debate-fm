@@ -17,20 +17,21 @@ fi
 
 echo "Apptainer version: $(apptainer --version)"
 
-# Set project root
-PROJ_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Set project root (parent of hpc directory)
+HPC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PROJ_ROOT=$(cd "$HPC_DIR/.." && pwd)
 cd "$PROJ_ROOT"
 
 # Build Apptainer image
 echo ""
 echo "Building Apptainer image..."
-APPTAINER_IMAGE="inflamm-debate-fm.sif"
+APPTAINER_IMAGE="$PROJ_ROOT/inflamm-debate-fm.sif"
 if [ -f "$APPTAINER_IMAGE" ]; then
     echo "Warning: $APPTAINER_IMAGE already exists. Removing it..."
     rm -f "$APPTAINER_IMAGE"
 fi
 
-apptainer build "$APPTAINER_IMAGE" Singularity.def
+apptainer build "$APPTAINER_IMAGE" "$HPC_DIR/Singularity.def"
 
 echo ""
 echo "Apptainer image built successfully: $APPTAINER_IMAGE"
@@ -47,7 +48,7 @@ mkdir -p reports/figures
 # Set up environment variables
 echo ""
 echo "Setting up environment..."
-export APPTAINER_IMAGE="$PROJ_ROOT/$APPTAINER_IMAGE"
+export APPTAINER_IMAGE="$APPTAINER_IMAGE"
 export DATA_DIR="$PROJ_ROOT/data"
 export MODELS_DIR="$PROJ_ROOT/models"
 
@@ -57,8 +58,13 @@ cat > run_apptainer.sh << 'EOF'
 # Wrapper script to run commands in Apptainer container
 # Supports GPU access via --nv flag when APPTAINER_USE_GPU is set
 
-APPTAINER_IMAGE="${APPTAINER_IMAGE:-inflamm-debate-fm.sif}"
 PROJ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Default to image in project root if APPTAINER_IMAGE not set
+APPTAINER_IMAGE="${APPTAINER_IMAGE:-$PROJ_ROOT/inflamm-debate-fm.sif}"
+# If APPTAINER_IMAGE is a relative path, make it absolute relative to PROJ_ROOT
+if [[ "$APPTAINER_IMAGE" != /* ]]; then
+    APPTAINER_IMAGE="$PROJ_ROOT/$APPTAINER_IMAGE"
+fi
 
 # Build apptainer command
 APPTAINER_CMD="apptainer exec"
@@ -90,10 +96,10 @@ fi
 
 # Bind mount data and models directories
 $APPTAINER_CMD \
-    --bind "$PROJ_ROOT/data:/opt/inflamm-debate-fm/data" \
-    --bind "$PROJ_ROOT/models:/opt/inflamm-debate-fm/models" \
-    --bind "$PROJ_ROOT/reports:/opt/inflamm-debate-fm/reports" \
-    --bind "$PROJ_ROOT/notebooks:/opt/inflamm-debate-fm/notebooks" \
+    --bind "$PROJ_ROOT/data:/inflamm-debate-fm/data" \
+    --bind "$PROJ_ROOT/models:/inflamm-debate-fm/models" \
+    --bind "$PROJ_ROOT/reports:/inflamm-debate-fm/reports" \
+    --bind "$PROJ_ROOT/notebooks:/inflamm-debate-fm/notebooks" \
     "$APPTAINER_IMAGE" \
     "$@"
 EOF

@@ -12,7 +12,7 @@ from inflamm_debate_fm.bulkformer.embed import (
     load_bulkformer_model,
 )
 from inflamm_debate_fm.config import DATA_ROOT, get_config
-from inflamm_debate_fm.data.orthologs import load_orthology_mapping
+from inflamm_debate_fm.data.orthologs import load_orthology_mapping_simple
 from inflamm_debate_fm.utils.wandb_utils import init_wandb, log_results
 
 # Dataset names by species
@@ -24,20 +24,35 @@ def filter_to_ortholog_genes(adata: ad.AnnData, orthology_mapping: pd.DataFrame)
     """Filter AnnData to only genes present in mouse ortholog mapping.
 
     Args:
-        adata: AnnData object with 'ensembl_id' in var.
-        orthology_mapping: DataFrame with 'human_ensembl' column.
+        adata: AnnData object with 'symbol' or 'ensembl' in var.
+        orthology_mapping: DataFrame with 'human_symbol' or 'human_ensembl' column.
+                          If 'human_ensembl' is present, uses that; otherwise uses 'human_symbol'.
 
     Returns:
         Filtered AnnData object.
     """
-    if "ensembl_id" not in adata.var.columns:
-        adata.var["ensembl_id"] = adata.var.index
+    # Determine which column to use for matching
+    if "human_ensembl" in orthology_mapping.columns:
+        # Use Ensembl IDs if available
+        if "ensembl_id" not in adata.var.columns:
+            # Try to use 'ensembl' column if available (from cleaned files)
+            if "ensembl" in adata.var.columns:
+                adata.var["ensembl_id"] = adata.var["ensembl"]
+            else:
+                adata.var["ensembl_id"] = adata.var.index
 
-    # Get set of human Ensembl IDs that have mouse orthologs
-    ortholog_genes = set(orthology_mapping["human_ensembl"].dropna().unique())
+        ortholog_genes = set(orthology_mapping["human_ensembl"].dropna().unique())
+        mask = adata.var["ensembl_id"].isin(ortholog_genes)
+    else:
+        # Use gene symbols
+        if "symbol" not in adata.var.columns:
+            # Try to use index as symbol if symbol column doesn't exist
+            adata.var["symbol"] = adata.var.index
+
+        ortholog_genes = set(orthology_mapping["human_symbol"].dropna().unique())
+        mask = adata.var["symbol"].isin(ortholog_genes)
 
     # Filter to genes present in ortholog mapping
-    mask = adata.var["ensembl_id"].isin(ortholog_genes)
     adata_filtered = adata[:, mask].copy()
 
     logger.info(f"Filtered to ortholog genes: {adata.shape[1]} -> {adata_filtered.shape[1]} genes")
@@ -66,7 +81,7 @@ def generate_embeddings_for_config(
         use_wandb: If True, log to wandb.
     """
     config = get_config()
-    ann_data_dir = DATA_ROOT / config["paths"]["ann_data_dir"]
+    ann_data_dir = DATA_ROOT / config["paths"]["anndata_cleaned_dir"]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -92,8 +107,8 @@ def generate_embeddings_for_config(
     # Load orthology mapping if needed
     orthology_mapping = None
     if filter_orthologs:
-        logger.info("Loading orthology mapping for gene filtering...")
-        orthology_mapping = load_orthology_mapping()
+        logger.info("Loading orthology mapping for gene filtering (no API calls)...")
+        orthology_mapping = load_orthology_mapping_simple()
 
     # Load model once for all datasets
     logger.info(f"Loading BulkFormer model for {config_name} configuration...")
@@ -103,7 +118,7 @@ def generate_embeddings_for_config(
     for dataset_name in datasets:
         logger.info(f"Processing {dataset_name} for {config_name} configuration...")
 
-        adata_path = ann_data_dir / f"{dataset_name}_orthologs.h5ad"
+        adata_path = ann_data_dir / f"{dataset_name}.h5ad"
         if not adata_path.exists():
             logger.warning(f"Dataset not found: {adata_path}, skipping...")
             continue

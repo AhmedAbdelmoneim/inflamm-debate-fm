@@ -21,7 +21,7 @@ def embed_generate(
 ) -> None:
     """Generate embeddings for a single dataset using BulkFormer."""
     config = get_config()
-    ann_data_dir = DATA_ROOT / config["paths"]["ann_data_dir"]
+    ann_data_dir = DATA_ROOT / config["paths"]["anndata_cleaned_dir"]
 
     if output_dir is None:
         output_dir = DATA_ROOT / config["paths"]["embeddings_dir"]
@@ -30,7 +30,7 @@ def embed_generate(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    adata_path = ann_data_dir / f"{dataset_name}_orthologs.h5ad"
+    adata_path = ann_data_dir / f"{dataset_name}.h5ad"
     if not adata_path.exists():
         logger.error(f"Dataset not found: {adata_path}")
         raise typer.Exit(1)
