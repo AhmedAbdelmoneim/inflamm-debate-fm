@@ -66,6 +66,20 @@ def prepare_finetuning_data(
             label="species",
             keys=["human", "mouse"],
         )
+        # Fill NaN values created by outer join (genes not present in one species)
+        # This is expected when combining human and mouse data
+        # Convert to dense if sparse, then check for NaN
+        X_dense = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
+        if np.isnan(X_dense).any():
+            nan_count = np.isnan(X_dense).sum()
+            logger.info(
+                f"Filling {nan_count} NaN values in combined data "
+                "(genes not present in one species). This is expected."
+            )
+            # Fill NaN with -10 (BulkFormer's standard padding value for missing genes)
+            # This matches what align_genes_to_bulkformer does for missing genes
+            X_dense = np.nan_to_num(X_dense, nan=-10.0, posinf=-10.0, neginf=-10.0)
+            adata.X = X_dense
     elif species == "human":
         adata = combine_adatas(adatas, "human")
     elif species == "mouse":

@@ -96,12 +96,30 @@ def train_lora_model(
     expr_df = adata_to_dataframe(adata)
     aligned_df, var = align_genes_to_bulkformer(expr_df, gene_data["bulkformer_gene_list"])
 
+    # Check for NaN/Inf values and fill them (critical for combined human+mouse data)
+    nan_count = np.isnan(aligned_df.values).sum()
+    inf_count = np.isinf(aligned_df.values).sum()
+    if nan_count > 0 or inf_count > 0:
+        logger.warning(
+            f"Found {nan_count} NaN and {inf_count} Inf values in aligned data. "
+            "Filling with -10 (BulkFormer's standard padding value). "
+            "This is expected when combining human and mouse data."
+        )
+        # Use -10 to match BulkFormer's padding for missing genes
+        aligned_df = aligned_df.fillna(-10.0)
+        aligned_df = aligned_df.replace([np.inf, -np.inf], -10.0)
+
     # Extract labels
     labels = adata.obs["group"].map({"inflammation": 1, "control": 0}).values.astype(int)
 
     # Convert to tensors
     X_tensor = torch.tensor(aligned_df.values, dtype=torch.float32)
     y_tensor = torch.tensor(labels, dtype=torch.long)
+
+    # Final validation: ensure no NaN/Inf in tensors
+    if torch.isnan(X_tensor).any() or torch.isinf(X_tensor).any():
+        logger.error("NaN/Inf values detected in input tensor after conversion!")
+        raise ValueError("Input tensor contains NaN or Inf values")
 
     # Create dataset and dataloader
     dataset = TensorDataset(X_tensor, y_tensor)
@@ -157,6 +175,9 @@ def train_lora_model(
     all_params = list(model.parameters()) + list(classification_head.parameters())
     optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
+
+    # Gradient clipping to prevent gradient explosion (helps with NaN losses)
+    max_grad_norm = 1.0
 
     # Setup wandb if requested
     wandb_run = None
@@ -218,8 +239,29 @@ def train_lora_model(
             # Calculate loss
             loss = criterion(logits, y_batch)
 
+            # Check for NaN/Inf in loss or logits before backward pass
+            if torch.isnan(loss) or torch.isinf(loss):
+                logger.error(
+                    f"NaN/Inf loss detected at epoch {epoch + 1}, batch {batch_idx}. "
+                    f"Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
+                    f"mean={logits.mean().item():.4f}, has_nan={torch.isnan(logits).any()}, "
+                    f"has_inf={torch.isinf(logits).any()}"
+                )
+                logger.error(
+                    f"Input stats: min={X_batch.min().item():.4f}, max={X_batch.max().item():.4f}, "
+                    f"mean={X_batch.mean().item():.4f}, has_nan={torch.isnan(X_batch).any()}, "
+                    f"has_inf={torch.isinf(X_batch).any()}"
+                )
+                # Skip this batch and continue
+                optimizer.zero_grad()
+                continue
+
             # Backward pass
             loss.backward()
+
+            # Gradient clipping to prevent explosion
+            torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
+
             optimizer.step()
 
             # Store loss value before deleting tensor
