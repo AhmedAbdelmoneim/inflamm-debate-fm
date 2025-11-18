@@ -109,16 +109,36 @@ def train_lora_model(
 
     # Load base model and apply LoRA
     logger.info("Loading base BulkFormer model...")
+    # Clear any existing CUDA cache before loading
+    if device_obj.type == "cuda":
+        torch.cuda.empty_cache()
+        logger.info(
+            f"GPU memory before loading: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB / {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
+        )
+
+    # Model is already loaded on device, so we don't need to move it again
     base_model_loaded = load_bulkformer_model(device=device)
     model = apply_lora_to_bulkformer(model=base_model_loaded, device=device)
 
+    # Check memory after loading
+    if device_obj.type == "cuda":
+        logger.info(
+            f"GPU memory after loading model: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB / {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
+        )
+
     # Add classification head: aggregate gene-level embeddings to sample-level
-    # Get embedding dimension from model config
+    # Get embedding dimension and gb_repeat from model config (do this once, not in loop)
     # Access base_model if wrapped by PEFT
     unwrapped_model = model.get_base_model() if hasattr(model, "get_base_model") else model
+    # Unwrap BulkFormerPEFTWrapper if present
+    if hasattr(unwrapped_model, "base_model"):
+        actual_base = unwrapped_model.base_model
+    else:
+        actual_base = unwrapped_model
     embedding_dim = (
-        unwrapped_model.dim if hasattr(unwrapped_model, "dim") else 640
+        actual_base.dim if hasattr(actual_base, "dim") else 640
     )  # BulkFormer embedding dimension (640)
+    gb_repeat = actual_base.gb_repeat if hasattr(actual_base, "gb_repeat") else 3
     classification_head = nn.Sequential(
         nn.Linear(embedding_dim, 128),
         nn.ReLU(),
@@ -126,8 +146,10 @@ def train_lora_model(
         nn.Linear(128, 2),  # Binary classification: control vs inflammation
     ).to(device_obj)
 
-    # Move model to device
-    model = model.to(device_obj)
+    # Ensure model is on correct device (should already be there, but verify)
+    # Only move if not already on device to avoid creating copies
+    if next(model.parameters()).device != device_obj:
+        model = model.to(device_obj)
     model.train()
     classification_head.train()
 
@@ -179,20 +201,12 @@ def train_lora_model(
             # Get gene-level embeddings from BulkFormer
             # Use repr_layers to get intermediate representations before the final head
             # Get embeddings from the last GBFormer layer (before layernorm and head)
-            # Get base model to check gb_repeat
-            base_model_wrapper = (
-                model.get_base_model() if hasattr(model, "get_base_model") else model
-            )
-            # Unwrap BulkFormerPEFTWrapper if present
-            if hasattr(base_model_wrapper, "base_model"):
-                actual_base = base_model_wrapper.base_model
-            else:
-                actual_base = base_model_wrapper
-            gb_repeat = actual_base.gb_repeat if hasattr(actual_base, "gb_repeat") else 3
             # Call through PEFT wrapper using inputs_embeds (PEFT-compatible parameter)
             _, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
             # hidden[gb_repeat - 1] is [batch_size, n_genes, embedding_dim]
             gene_embeddings = hidden[gb_repeat - 1]
+            # Clear hidden dict to free memory immediately
+            del hidden
 
             # Aggregate gene embeddings to sample-level (mean pooling)
             sample_embeddings = gene_embeddings.mean(dim=1)  # [batch_size, embedding_dim]
@@ -209,6 +223,12 @@ def train_lora_model(
 
             epoch_losses.append(loss.item())
             progress_bar.set_postfix({"loss": loss.item()})
+
+            # Clear intermediate tensors to free memory
+            del gene_embeddings, sample_embeddings, logits
+            # Only clear cache every N batches to avoid overhead
+            if batch_idx % 10 == 0 and device_obj.type == "cuda":
+                torch.cuda.empty_cache()
 
             # Log to wandb
             if use_wandb and wandb_run:
