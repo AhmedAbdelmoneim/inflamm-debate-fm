@@ -202,11 +202,12 @@ def train_lora_model(
             # Use repr_layers to get intermediate representations before the final head
             # Get embeddings from the last GBFormer layer (before layernorm and head)
             # Call through PEFT wrapper using inputs_embeds (PEFT-compatible parameter)
-            _, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
+            # Only request the layer we need to minimize memory usage
+            output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
             # hidden[gb_repeat - 1] is [batch_size, n_genes, embedding_dim]
             gene_embeddings = hidden[gb_repeat - 1]
-            # Clear hidden dict to free memory immediately
-            del hidden
+            # Clear output and hidden dict to free memory immediately
+            del output, hidden
 
             # Aggregate gene embeddings to sample-level (mean pooling)
             sample_embeddings = gene_embeddings.mean(dim=1)  # [batch_size, embedding_dim]
@@ -221,18 +222,20 @@ def train_lora_model(
             loss.backward()
             optimizer.step()
 
-            epoch_losses.append(loss.item())
-            progress_bar.set_postfix({"loss": loss.item()})
+            # Store loss value before deleting tensor
+            loss_value = loss.item()
+            epoch_losses.append(loss_value)
+            progress_bar.set_postfix({"loss": loss_value})
 
             # Clear intermediate tensors to free memory
-            del gene_embeddings, sample_embeddings, logits
-            # Only clear cache every N batches to avoid overhead
-            if batch_idx % 10 == 0 and device_obj.type == "cuda":
+            del gene_embeddings, sample_embeddings, logits, loss
+            # Clear cache more aggressively for memory-constrained scenarios
+            if device_obj.type == "cuda":
                 torch.cuda.empty_cache()
 
             # Log to wandb
             if use_wandb and wandb_run:
-                wandb_run.log({"batch_loss": loss.item(), "epoch": epoch})
+                wandb_run.log({"batch_loss": loss_value, "epoch": epoch})
 
         avg_loss = np.mean(epoch_losses)
         logger.info(f"Epoch {epoch + 1}/{n_epochs} - Average Loss: {avg_loss:.4f}")
