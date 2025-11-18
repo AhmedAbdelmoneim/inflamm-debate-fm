@@ -47,13 +47,41 @@ def apply_lora_to_bulkformer(
         model = load_bulkformer_model(device=device)
 
     # Default target modules: linear layers in GBFormer blocks and projection layers
+    # PEFT requires exact module names or simple patterns
     if target_modules is None:
+        # Dynamically find all Linear layers in the model
+        import re
+
+        linear_modules = []
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                linear_modules.append(name)
+
+        # Filter to key modules: projections and transformer attention/FFN layers
+        # Exclude the final head layer (we'll train that separately)
         target_modules = [
-            "gb_formers.*.linear",  # Linear layers in GBFormer blocks
-            "x_proj.*",  # Expression projection
-            "gene_emb_proj.*",  # Gene embedding projection
-            "ae_enc.*",  # Autoencoder encoder
+            name
+            for name in linear_modules
+            if (
+                name.startswith("gene_emb_proj.")
+                or name.startswith("x_proj.")
+                or name.startswith("ae_enc.")
+                or re.match(
+                    r"gb_formers\.\d+\.f\.\d+\.net\.layers\.\d+\.\d+\.fn\.(to_q|to_k|to_v|to_out)",
+                    name,
+                )
+                or re.match(
+                    r"gb_formers\.\d+\.f\.\d+\.net\.layers\.\d+\.\d+\.fn\.fn\.(w1|w2)", name
+                )
+            )
+            and not name.startswith("head.")  # Exclude final head
         ]
+
+        if len(target_modules) == 0:
+            # Fallback: use all Linear layers except head
+            target_modules = [name for name in linear_modules if not name.startswith("head.")]
+
+        logger.info(f"Targeting {len(target_modules)} Linear layers for LoRA adaptation")
 
     # Create LoRA config
     lora_config = LoraConfig(
