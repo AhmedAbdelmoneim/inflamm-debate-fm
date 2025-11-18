@@ -18,6 +18,44 @@ except ImportError:
 from inflamm_debate_fm.bulkformer.embed import load_bulkformer_model
 
 
+class BulkFormerPEFTWrapper(nn.Module):
+    """Wrapper to make BulkFormer compatible with PEFT's expected forward signature.
+
+    PEFT expects models to accept HuggingFace-style kwargs (input_ids, etc.),
+    but BulkFormer uses positional arguments. This wrapper bridges the gap.
+    """
+
+    def __init__(self, base_model: nn.Module):
+        super().__init__()
+        self.base_model = base_model
+
+    def forward(self, input_ids=None, inputs_embeds=None, repr_layers=None, **kwargs):
+        """Forward pass that accepts both PEFT-style and BulkFormer-style arguments.
+
+        Args:
+            input_ids: Input tensor (PEFT may pass this)
+            inputs_embeds: Input tensor (alternative PEFT parameter)
+            repr_layers: Layers to return representations from
+            **kwargs: Additional arguments (ignored for BulkFormer compatibility)
+        """
+        # Use inputs_embeds if provided (PEFT style), otherwise use input_ids
+        # PEFT may pass input_ids as the first positional arg or as keyword
+        if inputs_embeds is not None:
+            x = inputs_embeds
+        elif input_ids is not None:
+            x = input_ids
+        else:
+            # If neither provided, check if first positional arg was passed
+            # This shouldn't happen with PEFT, but handle it gracefully
+            raise ValueError("Must provide either input_ids or inputs_embeds")
+
+        # Call base model with BulkFormer's signature (only pass repr_layers if provided)
+        if repr_layers is not None:
+            return self.base_model(x, repr_layers=repr_layers)
+        else:
+            return self.base_model(x)
+
+
 def apply_lora_to_bulkformer(
     model: nn.Module | None = None,
     r: int = 8,
@@ -46,14 +84,21 @@ def apply_lora_to_bulkformer(
     if model is None:
         model = load_bulkformer_model(device=device)
 
+    # Store original model for finding target modules (before wrapping)
+    original_model = model
+
+    # Wrap model to make it compatible with PEFT's expected forward signature
+    if not isinstance(model, BulkFormerPEFTWrapper):
+        model = BulkFormerPEFTWrapper(model)
+
     # Default target modules: linear layers in GBFormer blocks and projection layers
     # PEFT requires exact module names or simple patterns
     if target_modules is None:
-        # Dynamically find all Linear layers in the model
+        # Dynamically find all Linear layers in the original model (before wrapper)
         import re
 
         linear_modules = []
-        for name, module in model.named_modules():
+        for name, module in original_model.named_modules():
             if isinstance(module, torch.nn.Linear):
                 linear_modules.append(name)
 
@@ -80,6 +125,10 @@ def apply_lora_to_bulkformer(
         if len(target_modules) == 0:
             # Fallback: use all Linear layers except head
             target_modules = [name for name in linear_modules if not name.startswith("head.")]
+
+        # Adjust target_modules to account for BulkFormerPEFTWrapper prefix
+        # When PEFT wraps our wrapper, modules are accessed as "base_model.module_name"
+        target_modules = [f"base_model.{name}" for name in target_modules]
 
         logger.info(f"Targeting {len(target_modules)} Linear layers for LoRA adaptation")
 

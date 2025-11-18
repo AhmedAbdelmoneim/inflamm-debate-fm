@@ -179,10 +179,18 @@ def train_lora_model(
             # Get gene-level embeddings from BulkFormer
             # Use repr_layers to get intermediate representations before the final head
             # Get embeddings from the last GBFormer layer (before layernorm and head)
-            # Access base_model if wrapped by PEFT
-            unwrapped_model = model.get_base_model() if hasattr(model, "get_base_model") else model
-            gb_repeat = unwrapped_model.gb_repeat if hasattr(unwrapped_model, "gb_repeat") else 3
-            _, hidden = model(X_batch, repr_layers=[gb_repeat - 1])
+            # Get base model to check gb_repeat
+            base_model_wrapper = (
+                model.get_base_model() if hasattr(model, "get_base_model") else model
+            )
+            # Unwrap BulkFormerPEFTWrapper if present
+            if hasattr(base_model_wrapper, "base_model"):
+                actual_base = base_model_wrapper.base_model
+            else:
+                actual_base = base_model_wrapper
+            gb_repeat = actual_base.gb_repeat if hasattr(actual_base, "gb_repeat") else 3
+            # Call through PEFT wrapper using inputs_embeds (PEFT-compatible parameter)
+            _, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
             # hidden[gb_repeat - 1] is [batch_size, n_genes, embedding_dim]
             gene_embeddings = hidden[gb_repeat - 1]
 
