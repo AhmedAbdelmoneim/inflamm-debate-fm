@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from inflamm_debate_fm.config import DATA_DIR, get_config
-from inflamm_debate_fm.data.load import combine_adatas, load_adatas
+from inflamm_debate_fm.data.load import combine_adatas
 
 
 def prepare_finetuning_data(
@@ -36,24 +36,36 @@ def prepare_finetuning_data(
     np.random.seed(random_seed)
 
     config = get_config()
-    ann_data_dir = DATA_DIR / config["paths"]["ann_data_dir"]
-    embeddings_dir = DATA_DIR / config["paths"]["embeddings_dir"]
 
-    # Load all data
-    logger.info(f"Loading data for {species} fine-tuning...")
-    adatas = load_adatas(ann_data_dir, embeddings_dir, load_embeddings=False)
+    # Load individual datasets from anndata_cleaned (files like human_burn.h5ad, mouse_burn.h5ad)
+    cleaned_data_dir = DATA_DIR / config["paths"]["anndata_cleaned_dir"]
+
+    logger.info(f"Loading data for {species} fine-tuning from {cleaned_data_dir}")
+
+    # Load all individual dataset files
+    adatas = {}
+    for f in sorted(cleaned_data_dir.glob("*.h5ad")):
+        name = f.stem
+        adatas[name] = ad.read_h5ad(f)
+
+    if len(adatas) == 0:
+        raise ValueError(
+            f"No AnnData files found in {cleaned_data_dir}. "
+            f"Expected files like human_burn.h5ad, human_sepsis.h5ad, mouse_burn.h5ad, etc."
+        )
+
+    logger.info(f"Found {len(adatas)} datasets: {list(adatas.keys())}")
 
     if species == "combined":
         # Combine human and mouse
         human_adata = combine_adatas(adatas, "human")
         mouse_adata = combine_adatas(adatas, "mouse")
-        combined_adata = ad.concat(
+        adata = ad.concat(
             [human_adata, mouse_adata],
             join="outer",
             label="species",
             keys=["human", "mouse"],
         )
-        adata = combined_adata
     elif species == "human":
         adata = combine_adatas(adatas, "human")
     elif species == "mouse":
