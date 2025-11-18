@@ -195,6 +195,14 @@ cython_debug/
 .pypirc
 
 # HPC job logs
+run_apptainer.sh
 logs/
 *.out
 *.err
+*.sif
+
+# wandb
+wandb/
+
+# models unless otherwise specified
+models/

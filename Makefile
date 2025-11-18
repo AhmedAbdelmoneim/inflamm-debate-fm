@@ -49,7 +49,7 @@ format:
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
-	uv venv --python 3.12.7
+	uv venv --python 3.12.7 --clear
 	@echo ">>> New uv virtual environment created. Activate with:"
 	@echo ">>> Windows: .\\\\.venv\\\\Scripts\\\\activate"
 	@echo ">>> Unix/macOS: source ./.venv/bin/activate"
