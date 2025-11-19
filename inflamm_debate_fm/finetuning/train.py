@@ -25,7 +25,7 @@ def train_lora_model(
     species: str,
     n_inflammation: int = 32,
     n_control: int = 32,
-    n_epochs: int = 10,
+    n_epochs: int = 50,
     batch_size: int = 8,
     learning_rate: float = 1e-4,
     weight_decay: float = 0.01,
@@ -33,6 +33,7 @@ def train_lora_model(
     output_dir: Path | None = None,
     random_seed: int = 42,
     use_wandb: bool = False,
+    early_stopping_patience: int = 7,
 ) -> Path:
     """Train LoRA fine-tuned model for inflammation classification.
 
@@ -40,7 +41,7 @@ def train_lora_model(
         species: Species to train on ('human', 'mouse', or 'combined').
         n_inflammation: Number of inflammation samples.
         n_control: Number of control samples.
-        n_epochs: Number of training epochs.
+        n_epochs: Number of training epochs (default: 50).
         batch_size: Batch size for training.
         learning_rate: Learning rate.
         weight_decay: Weight decay for optimizer.
@@ -48,6 +49,7 @@ def train_lora_model(
         output_dir: Directory to save checkpoints and metadata.
         random_seed: Random seed for reproducibility.
         use_wandb: Whether to log to Weights & Biases.
+        early_stopping_patience: Number of epochs to wait without improvement before stopping (default: 7).
 
     Returns:
         Path to saved checkpoint directory.
@@ -203,9 +205,13 @@ def train_lora_model(
             logger.warning(f"Failed to initialize wandb: {e}")
             use_wandb = False
 
-    # Training loop
-    logger.info(f"Starting training for {n_epochs} epochs...")
+    # Training loop with early stopping
+    logger.info(
+        f"Starting training for {n_epochs} epochs (early stopping patience: {early_stopping_patience})..."
+    )
     best_loss = float("inf")
+    epochs_without_improvement = 0
+    best_epoch = 0
 
     for epoch in range(n_epochs):
         epoch_losses = []
@@ -282,9 +288,15 @@ def train_lora_model(
         avg_loss = np.mean(epoch_losses)
         logger.info(f"Epoch {epoch + 1}/{n_epochs} - Average Loss: {avg_loss:.4f}")
 
-        # Save checkpoint if best
+        # Check for improvement
         if avg_loss < best_loss:
+            improvement = best_loss - avg_loss
             best_loss = avg_loss
+            best_epoch = epoch + 1
+            epochs_without_improvement = 0
+            logger.info(f"  ✓ New best loss: {best_loss:.4f} (improvement: {improvement:.4f})")
+
+            # Save checkpoint if best
             checkpoint_dir = output_dir / "checkpoint_best"
             save_lora_checkpoint(
                 model=model,
@@ -302,20 +314,43 @@ def train_lora_model(
                 classification_head.state_dict(),
                 checkpoint_dir / "classification_head.pt",
             )
+        else:
+            epochs_without_improvement += 1
+            logger.info(
+                f"  No improvement ({epochs_without_improvement}/{early_stopping_patience} epochs)"
+            )
 
         # Log epoch metrics to wandb
         if use_wandb and wandb_run:
-            wandb_run.log({"epoch_loss": avg_loss, "epoch": epoch})
+            wandb_run.log(
+                {
+                    "epoch_loss": avg_loss,
+                    "best_loss": best_loss,
+                    "epochs_without_improvement": epochs_without_improvement,
+                    "epoch": epoch,
+                }
+            )
 
-    # Save final checkpoint
+        # Early stopping check
+        if epochs_without_improvement >= early_stopping_patience:
+            logger.info(
+                f"Early stopping triggered: no improvement for {early_stopping_patience} epochs. "
+                f"Best loss: {best_loss:.4f} at epoch {best_epoch}"
+            )
+            break
+
+    # Save final checkpoint (last epoch, even if not best)
     final_checkpoint_dir = output_dir / "checkpoint_final"
     save_lora_checkpoint(
         model=model,
         output_path=final_checkpoint_dir,
         metadata={
-            "epoch": n_epochs,
+            "epoch": epoch
+            + 1,  # Use actual epoch reached (may be less than n_epochs if early stopped)
             "final_loss": avg_loss,
             "best_loss": best_loss,
+            "best_epoch": best_epoch,
+            "early_stopped": epochs_without_improvement >= early_stopping_patience,
             "species": species,
             "n_inflammation": n_inflammation,
             "n_control": n_control,
@@ -327,7 +362,10 @@ def train_lora_model(
         final_checkpoint_dir / "classification_head.pt",
     )
 
-    logger.success(f"Training complete! Checkpoints saved to {output_dir}")
+    logger.success(
+        f"Training complete! Best loss: {best_loss:.4f} at epoch {best_epoch}. "
+        f"Checkpoints saved to {output_dir}"
+    )
 
     if use_wandb and wandb_run:
         wandb_run.finish()

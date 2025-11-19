@@ -155,7 +155,7 @@ probe-cross: requirements
 ## Fine-tune model with LoRA
 .PHONY: finetune
 finetune: requirements
-	@echo "Usage: make finetune SPECIES=<human|mouse|combined> [EPOCHS=<10>] [BATCH_SIZE=<8>] [USE_WANDB=<true|false>]"
+	@echo "Usage: make finetune SPECIES=<human|mouse|combined> [EPOCHS=<50>] [BATCH_SIZE=<8>] [EARLY_STOPPING_PATIENCE=<7>] [USE_WANDB=<true|false>]"
 	@if [ -z "$(SPECIES)" ]; then \
 		echo "Error: SPECIES variable is required"; \
 		echo "Example: make finetune SPECIES=human USE_WANDB=true"; \
@@ -164,13 +164,15 @@ finetune: requirements
 	@if [ "$(USE_WANDB)" = "true" ]; then \
 		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli finetune train \
 			--species $(SPECIES) \
-			--epochs $(or $(EPOCHS),10) \
+			--epochs $(or $(EPOCHS),50) \
+			--early-stopping-patience $(or $(EARLY_STOPPING_PATIENCE),7) \
 			--batch-size $(or $(BATCH_SIZE),8) \
 			--use-wandb; \
 	else \
 		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli finetune train \
 			--species $(SPECIES) \
-			--epochs $(or $(EPOCHS),10) \
+			--epochs $(or $(EPOCHS),50) \
+			--early-stopping-patience $(or $(EARLY_STOPPING_PATIENCE),7) \
 			--batch-size $(or $(BATCH_SIZE),8); \
 	fi
 
