@@ -4,26 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --account=def-<account>  # TODO: Replace with your Compute Canada account
-# Example: #SBATCH --account=def-username
-# Note: Log files are written to the current working directory (where sbatch is run)
-# If you need custom log paths, override with: sbatch --output=/path/to/logs/job_%j.out --error=/path/to/logs/job_%j.err hpc/run_job.sh ...
-#SBATCH --output=%x_%j.out
-#SBATCH --error=%x_%j.err
-
-# Flexible SLURM job script for inflamm-debate-fm
-# Usage examples (run from project root):
-#   sbatch hpc/run_job.sh preprocess data
-#   sbatch hpc/run_job.sh embed generate human_burn --device cuda
-#   sbatch hpc/run_job.sh probe within-species human
-#   sbatch hpc/run_job.sh probe cross-species
-#   sbatch hpc/run_job.sh analyze coefficients
-#   sbatch hpc/run_job.sh analyze gsea
-#   sbatch hpc/run_job.sh plot within-species human
-#
-# For GPU jobs (e.g., embeddings), add to sbatch command:
-#   sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
-#   sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed all-configs --device cuda --batch-size 16 --use-wandb
+#SBATCH --account=def-jagillis
+#SBATCH --output=run_logs/%x_%j.out
+#SBATCH --error=run_logs/%x_%j.err
 
 set -e
 
