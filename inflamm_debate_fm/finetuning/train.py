@@ -28,8 +28,9 @@ def _get_species_tensor(adata, fallback_label: str) -> torch.Tensor:
     """Return tensor encoding species IDs aligned with adata rows."""
     fallback = fallback_label.lower()
     if "species" in adata.obs.columns:
-        species_series = adata.obs["species"].fillna(fallback_label)
-        labels = species_series.astype(str).str.lower().tolist()
+        species_series = adata.obs["species"].astype(str)
+        species_series = species_series.replace("nan", fallback_label)
+        labels = species_series.str.lower().tolist()
     else:
         labels = [fallback] * adata.shape[0]
 
