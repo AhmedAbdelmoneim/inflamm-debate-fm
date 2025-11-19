@@ -12,9 +12,11 @@ import pandas as pd
 from inflamm_debate_fm.config import DATA_DIR, get_config
 from inflamm_debate_fm.data.load import combine_adatas
 
+SpeciesLiteral = Literal["human", "mouse", "combined", "universal"]
+
 
 def prepare_finetuning_data(
-    species: Literal["human", "mouse", "combined"],
+    species: SpeciesLiteral,
     n_inflammation: int = 32,
     n_control: int = 32,
     random_seed: int = 42,
@@ -23,7 +25,7 @@ def prepare_finetuning_data(
     """Prepare data for fine-tuning with balanced inflammation/control samples.
 
     Args:
-        species: Which species to use ('human', 'mouse', or 'combined').
+        species: Which species to use ('human', 'mouse', 'combined', or 'universal').
         n_inflammation: Number of inflammation samples to use.
         n_control: Number of control samples to use.
         random_seed: Random seed for reproducibility.
@@ -56,7 +58,7 @@ def prepare_finetuning_data(
 
     logger.info(f"Found {len(adatas)} datasets: {list(adatas.keys())}")
 
-    if species == "combined":
+    if species in {"combined", "universal"}:
         # Combine human and mouse
         human_adata = combine_adatas(adatas, "human")
         mouse_adata = combine_adatas(adatas, "mouse")
@@ -174,7 +176,7 @@ def save_finetuning_metadata(
 
     Args:
         sample_metadata: DataFrame with sample information.
-        species: Species used ('human', 'mouse', or 'combined').
+        species: Species used ('human', 'mouse', 'combined', or 'universal').
         n_inflammation: Number of inflammation samples.
         n_control: Number of control samples.
         percentage_used: Percentage of available data used.
@@ -208,7 +210,7 @@ def load_finetuning_metadata(species: str, metadata_dir: Path) -> tuple[pd.DataF
     """Load metadata about which samples were used for fine-tuning.
 
     Args:
-        species: Species ('human', 'mouse', or 'combined').
+        species: Species ('human', 'mouse', 'combined', or 'universal').
         metadata_dir: Directory containing metadata files.
 
     Returns:

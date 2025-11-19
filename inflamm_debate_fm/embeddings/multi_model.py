@@ -28,7 +28,7 @@ def detect_available_models(models_root: Path | None = None) -> dict[str, Path]:
 
     Returns:
         Dictionary mapping model names to checkpoint paths.
-        Keys: 'zero_shot', 'human', 'mouse', 'combined'
+        Keys: 'zero_shot', 'human', 'mouse', 'combined', 'universal' (where available)
     """
     if models_root is None:
         models_root = MODELS_ROOT
@@ -43,7 +43,7 @@ def detect_available_models(models_root: Path | None = None) -> dict[str, Path]:
     # Check for fine-tuned models
     finetuned_dir = models_root / "finetuned_lora"
     if finetuned_dir.exists():
-        for species in ["human", "mouse", "combined"]:
+        for species in ["human", "mouse", "combined", "universal"]:
             species_dir = finetuned_dir / species
             if species_dir.exists():
                 # Check for checkpoint_best or checkpoint_final

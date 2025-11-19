@@ -174,7 +174,7 @@ sbatch hpc/run_job.sh probe within-species --species human
 
 ## Fine-tuning with LoRA
 
-Fine-tune BulkFormer models using LoRA (Low-Rank Adaptation) for inflammation classification. This uses a subset of the data (32+32 samples by default) and tracks which samples were used to exclude them from downstream evaluation.
+Fine-tune BulkFormer models using LoRA (Low-Rank Adaptation) for inflammation classification. This uses a subset of the data (32+32 samples by default) and tracks which samples were used to exclude them from downstream evaluation. A new **universal** mode adds a cross-species InfoNCE objective that L2-normalizes embeddings and pulls human/mouse inflammation samples together while pushing all other cross-species pairs apart.
 
 ### Data Validation
 
@@ -186,7 +186,11 @@ The fine-tuning process:
 
 ### Training Models
 
-Fine-tune three models (one per species configuration):
+Fine-tune four models:
+1. `human` — human-only classification objective
+2. `mouse` — mouse-only classification objective
+3. `combined` — human+mouse classification objective
+4. `universal` — cross-species contrastive objective (aligns human & mouse inflammation embeddings via InfoNCE)
 
 ```bash
 # Train on human data only
@@ -197,6 +201,13 @@ python -m inflamm_debate_fm.cli finetune train --species mouse
 
 # Train on combined human+mouse data
 python -m inflamm_debate_fm.cli finetune train --species combined
+
+# Train universal cross-species model (InfoNCE + classification)
+python -m inflamm_debate_fm.cli finetune train \
+    --species universal \
+    --contrastive-weight 1.0 \
+    --contrastive-temperature 0.07 \
+    --use-wandb
 ```
 
 ### Custom Training Options
@@ -214,6 +225,8 @@ python -m inflamm_debate_fm.cli finetune train \
     --use-wandb
 ```
 
+For the universal contrastive mode, tune the shared embedding alignment via `--contrastive-weight` and `--contrastive-temperature`.
+
 ### Output Structure
 
 Each fine-tuning run creates:
@@ -229,8 +242,8 @@ Each fine-tuning run creates:
 sbatch --gpus=h100:1 --time=12:00:00 --mem=32G \
     hpc/run_job.sh finetune train --species human --use-wandb
 
-# Train all three models
-for species in human mouse combined; do
+# Train all four models (including universal contrastive mode)
+for species in human mouse combined universal; do
     sbatch --gpus=h100:1 --time=12:00:00 --mem=32G \
         hpc/run_job.sh finetune train --species $species --use-wandb
 done
@@ -264,6 +277,7 @@ This command:
   - `X_human`: Human fine-tuned model embeddings (if available)
   - `X_mouse`: Mouse fine-tuned model embeddings (if available)
   - `X_combined`: Combined fine-tuned model embeddings (if available)
+  - `X_universal`: Cross-species contrastive embeddings (if available)
 
 The embeddings are ready for probing analysis. Uses `batch_size=4` by default for CUDA memory optimization.
 

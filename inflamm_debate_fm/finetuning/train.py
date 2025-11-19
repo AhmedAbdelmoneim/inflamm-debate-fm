@@ -6,6 +6,7 @@ from loguru import logger
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
@@ -19,6 +20,93 @@ from inflamm_debate_fm.config import MODELS_ROOT, get_config
 from inflamm_debate_fm.finetuning.data import prepare_finetuning_data, save_finetuning_metadata
 from inflamm_debate_fm.finetuning.lora import apply_lora_to_bulkformer, save_lora_checkpoint
 from inflamm_debate_fm.utils.wandb_utils import init_wandb
+
+SPECIES_TO_ID = {"human": 0, "mouse": 1}
+
+
+def _get_species_tensor(adata, fallback_label: str) -> torch.Tensor:
+    """Return tensor encoding species IDs aligned with adata rows."""
+    fallback = fallback_label.lower()
+    if "species" in adata.obs.columns:
+        species_series = adata.obs["species"].fillna(fallback_label)
+        labels = species_series.astype(str).str.lower().tolist()
+    else:
+        labels = [fallback] * adata.shape[0]
+
+    mapped = [SPECIES_TO_ID.get(label, -1) for label in labels]
+    return torch.tensor(mapped, dtype=torch.long)
+
+
+def _match_positions(
+    selected_indices: torch.Tensor, all_indices: torch.Tensor
+) -> torch.Tensor | None:
+    """Map selected global indices to their positions inside a reference index tensor."""
+    if all_indices.numel() == 0 or selected_indices.numel() == 0:
+        return None
+
+    eq = selected_indices.unsqueeze(1) == all_indices.unsqueeze(0)
+    if not torch.all(eq.any(dim=1)):
+        return None
+
+    return eq.to(dtype=torch.int64).argmax(dim=1)
+
+
+def _compute_cross_species_contrastive_loss(
+    normalized_embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    species_ids: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor | None:
+    """Compute InfoNCE loss where positives are cross-species inflammation pairs."""
+    device = normalized_embeddings.device
+    human_mask = species_ids == SPECIES_TO_ID["human"]
+    mouse_mask = species_ids == SPECIES_TO_ID["mouse"]
+
+    if human_mask.sum() == 0 or mouse_mask.sum() == 0:
+        return None
+
+    human_all_idx = torch.where(human_mask)[0]
+    mouse_all_idx = torch.where(mouse_mask)[0]
+    human_all = normalized_embeddings[human_all_idx]
+    mouse_all = normalized_embeddings[mouse_all_idx]
+
+    total_loss = 0.0
+    component_count = 0
+
+    for target_label in (1, 0):  # 1 = inflammation, 0 = control
+        human_subset = torch.where(human_mask & (labels == target_label))[0]
+        mouse_subset = torch.where(mouse_mask & (labels == target_label))[0]
+
+        if len(human_subset) == 0 or len(mouse_subset) == 0:
+            continue
+
+        num_pairs = min(len(human_subset), len(mouse_subset))
+        if num_pairs == 0:
+            continue
+
+        perm_h = torch.randperm(len(human_subset), device=device)[:num_pairs]
+        perm_m = torch.randperm(len(mouse_subset), device=device)[:num_pairs]
+        selected_h = human_subset[perm_h]
+        selected_m = mouse_subset[perm_m]
+
+        labels_for_h = _match_positions(selected_m, mouse_all_idx)
+        labels_for_m = _match_positions(selected_h, human_all_idx)
+        if labels_for_h is None or labels_for_m is None:
+            continue
+
+        logits_h = torch.matmul(normalized_embeddings[selected_h], mouse_all.T) / temperature
+        logits_m = torch.matmul(normalized_embeddings[selected_m], human_all.T) / temperature
+
+        loss_h = F.cross_entropy(logits_h, labels_for_h)
+        loss_m = F.cross_entropy(logits_m, labels_for_m)
+
+        total_loss += 0.5 * (loss_h + loss_m)
+        component_count += 1
+
+    if component_count == 0:
+        return None
+
+    return total_loss / component_count
 
 
 def train_lora_model(
@@ -34,11 +122,13 @@ def train_lora_model(
     random_seed: int = 42,
     use_wandb: bool = False,
     early_stopping_patience: int = 7,
+    contrastive_weight: float = 1.0,
+    contrastive_temperature: float = 0.07,
 ) -> Path:
     """Train LoRA fine-tuned model for inflammation classification.
 
     Args:
-        species: Species to train on ('human', 'mouse', or 'combined').
+        species: Species to train on ('human', 'mouse', 'combined', or 'universal').
         n_inflammation: Number of inflammation samples.
         n_control: Number of control samples.
         n_epochs: Number of training epochs (default: 50).
@@ -50,6 +140,8 @@ def train_lora_model(
         random_seed: Random seed for reproducibility.
         use_wandb: Whether to log to Weights & Biases.
         early_stopping_patience: Number of epochs to wait without improvement before stopping (default: 7).
+        contrastive_weight: Weight applied to cross-species InfoNCE loss (used for 'universal' mode).
+        contrastive_temperature: Temperature used inside the InfoNCE loss.
 
     Returns:
         Path to saved checkpoint directory.
@@ -66,8 +158,18 @@ def train_lora_model(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    training_mode = "cross_contrastive" if species == "universal" else "classification"
+
     logger.info(f"Training LoRA model for {species} on {device}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(
+        f"Training mode: {training_mode}"
+        + (
+            f" (contrastive_weight={contrastive_weight}, temperature={contrastive_temperature})"
+            if training_mode == "cross_contrastive"
+            else ""
+        )
+    )
 
     # Prepare data
     adata, sample_metadata = prepare_finetuning_data(
@@ -124,7 +226,25 @@ def train_lora_model(
         raise ValueError("Input tensor contains NaN or Inf values")
 
     # Create dataset and dataloader
-    dataset = TensorDataset(X_tensor, y_tensor)
+    fallback_species = (
+        "human" if species == "human" else "mouse" if species == "mouse" else "unknown"
+    )
+    species_tensor = _get_species_tensor(adata, fallback_species)
+
+    if training_mode == "cross_contrastive":
+        human_count = int((species_tensor == SPECIES_TO_ID["human"]).sum().item())
+        mouse_count = int((species_tensor == SPECIES_TO_ID["mouse"]).sum().item())
+        if human_count == 0 or mouse_count == 0:
+            raise ValueError(
+                "Universal contrastive mode requires both human and mouse samples. "
+                "Please ensure the combined dataset includes both species."
+            )
+        logger.info(
+            f"Batchable samples - Human: {human_count}, Mouse: {mouse_count}. "
+            "Only cross-species inflammation pairs will be treated as positives."
+        )
+
+    dataset = TensorDataset(X_tensor, y_tensor, species_tensor)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Load base model and apply LoRA
@@ -196,6 +316,9 @@ def train_lora_model(
                     "batch_size": batch_size,
                     "learning_rate": learning_rate,
                     "weight_decay": weight_decay,
+                    "training_mode": training_mode,
+                    "contrastive_weight": contrastive_weight,
+                    "contrastive_temperature": contrastive_temperature,
                 },
             )
             # Set run name
@@ -215,12 +338,14 @@ def train_lora_model(
 
     for epoch in range(n_epochs):
         epoch_losses = []
+        epoch_contrastive_losses = []
         model.train()
 
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{n_epochs}")
-        for batch_idx, (X_batch, y_batch) in enumerate(progress_bar):
+        for batch_idx, (X_batch, y_batch, species_batch) in enumerate(progress_bar):
             X_batch = X_batch.to(device_obj)
             y_batch = y_batch.to(device_obj)
+            species_batch = species_batch.to(device_obj)
 
             # Forward pass
             optimizer.zero_grad()
@@ -243,7 +368,29 @@ def train_lora_model(
             logits = classification_head(sample_embeddings)  # [batch_size, 2]
 
             # Calculate loss
-            loss = criterion(logits, y_batch)
+            ce_loss = criterion(logits, y_batch)
+            loss = ce_loss
+            ce_loss_value = ce_loss.item()
+
+            contrastive_component = None
+            contrastive_loss_value = None
+            normalized_embeddings = None
+            if training_mode == "cross_contrastive" and contrastive_weight > 0:
+                normalized_embeddings = F.normalize(sample_embeddings, p=2, dim=1)
+                contrastive_component = _compute_cross_species_contrastive_loss(
+                    normalized_embeddings,
+                    y_batch,
+                    species_batch,
+                    contrastive_temperature,
+                )
+                if contrastive_component is not None:
+                    loss = loss + contrastive_weight * contrastive_component
+                    contrastive_loss_value = contrastive_component.item()
+                    epoch_contrastive_losses.append(contrastive_loss_value)
+                else:
+                    logger.debug(
+                        "Skipped contrastive update for this batch (insufficient cross-species inflammation pairs)."
+                    )
 
             # Check for NaN/Inf in loss or logits before backward pass
             if torch.isnan(loss) or torch.isinf(loss):
@@ -273,20 +420,40 @@ def train_lora_model(
             # Store loss value before deleting tensor
             loss_value = loss.item()
             epoch_losses.append(loss_value)
-            progress_bar.set_postfix({"loss": loss_value})
+            postfix = {"loss": loss_value, "cls": ce_loss_value}
+            if contrastive_loss_value is not None:
+                postfix["contrastive"] = contrastive_loss_value
+            progress_bar.set_postfix(postfix)
 
             # Clear intermediate tensors to free memory
-            del gene_embeddings, sample_embeddings, logits, loss
+            del gene_embeddings, sample_embeddings, logits, loss, ce_loss
+            if contrastive_component is not None:
+                del contrastive_component
+            if normalized_embeddings is not None:
+                del normalized_embeddings
+            del species_batch
             # Clear cache more aggressively for memory-constrained scenarios
             if device_obj.type == "cuda":
                 torch.cuda.empty_cache()
 
             # Log to wandb
             if use_wandb and wandb_run:
-                wandb_run.log({"batch_loss": loss_value, "epoch": epoch})
+                log_payload = {
+                    "batch_loss": loss_value,
+                    "classification_loss": ce_loss_value,
+                    "epoch": epoch,
+                }
+                if contrastive_loss_value is not None:
+                    log_payload["contrastive_loss"] = contrastive_loss_value
+                wandb_run.log(log_payload)
 
         avg_loss = np.mean(epoch_losses)
+        avg_contrastive_loss = (
+            float(np.mean(epoch_contrastive_losses)) if epoch_contrastive_losses else None
+        )
         logger.info(f"Epoch {epoch + 1}/{n_epochs} - Average Loss: {avg_loss:.4f}")
+        if avg_contrastive_loss is not None:
+            logger.info(f"  Contrastive Loss (avg): {avg_contrastive_loss:.4f}")
 
         # Check for improvement
         if avg_loss < best_loss:
@@ -307,6 +474,9 @@ def train_lora_model(
                     "species": species,
                     "n_inflammation": n_inflammation,
                     "n_control": n_control,
+                    "training_mode": training_mode,
+                    "contrastive_weight": contrastive_weight,
+                    "contrastive_temperature": contrastive_temperature,
                 },
             )
             # Also save classification head
@@ -322,14 +492,15 @@ def train_lora_model(
 
         # Log epoch metrics to wandb
         if use_wandb and wandb_run:
-            wandb_run.log(
-                {
-                    "epoch_loss": avg_loss,
-                    "best_loss": best_loss,
-                    "epochs_without_improvement": epochs_without_improvement,
-                    "epoch": epoch,
-                }
-            )
+            epoch_log = {
+                "epoch_loss": avg_loss,
+                "best_loss": best_loss,
+                "epochs_without_improvement": epochs_without_improvement,
+                "epoch": epoch,
+            }
+            if avg_contrastive_loss is not None:
+                epoch_log["epoch_contrastive_loss"] = avg_contrastive_loss
+            wandb_run.log(epoch_log)
 
         # Early stopping check
         if epochs_without_improvement >= early_stopping_patience:
@@ -354,6 +525,9 @@ def train_lora_model(
             "species": species,
             "n_inflammation": n_inflammation,
             "n_control": n_control,
+            "training_mode": training_mode,
+            "contrastive_weight": contrastive_weight,
+            "contrastive_temperature": contrastive_temperature,
         },
     )
     # Also save classification head
