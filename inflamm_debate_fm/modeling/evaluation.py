@@ -365,6 +365,8 @@ def evaluate_cross_species(
     mouse_adata: ad.AnnData,
     setups: list[tuple[str, Callable]],
     n_bootstraps: int = 20,
+    bootstrap_start: int | None = None,
+    bootstrap_end: int | None = None,
     embedding_keys: list[str] | None = None,
     save_weights: bool = True,
     weights_output_dir: Path | str | None = None,
@@ -378,6 +380,8 @@ def evaluate_cross_species(
         mouse_adata: AnnData object for mouse data.
         setups: List of tuples (setup_name, transform_func) returning X_raw, X_embeddings_dict, y.
         n_bootstraps: Number of bootstrap iterations.
+        bootstrap_start: Start index for bootstrap range (for parallelization). If None, starts at 0.
+        bootstrap_end: End index for bootstrap range (for parallelization). If None, uses n_bootstraps.
         embedding_keys: List of embedding keys to use. If None, uses all available.
         save_weights: Whether to save model weights for interpretability.
         weights_output_dir: Directory to save model weights. If None, doesn't save.
@@ -390,6 +394,22 @@ def evaluate_cross_species(
     config = get_config()
     n_bootstraps = config.get("model", {}).get("n_bootstraps", n_bootstraps)
     random_seed = config.get("model", {}).get("random_seed", 42)
+
+    # Handle bootstrap range for parallelization
+    if bootstrap_start is None:
+        bootstrap_start = 0
+    if bootstrap_end is None:
+        bootstrap_end = n_bootstraps
+
+    bootstrap_range = range(bootstrap_start, bootstrap_end)
+    actual_n_bootstraps = len(bootstrap_range)
+
+    if actual_n_bootstraps == 0:
+        raise ValueError(f"Invalid bootstrap range: start={bootstrap_start}, end={bootstrap_end}")
+
+    tqdm.write(
+        f"Running bootstraps {bootstrap_start} to {bootstrap_end - 1} (total: {actual_n_bootstraps})"
+    )
 
     if weights_output_dir is not None:
         weights_output_dir = Path(weights_output_dir)
@@ -447,14 +467,14 @@ def evaluate_cross_species(
 
             # Human -> Mouse with bootstrapping
             tqdm.write(
-                f"  Training on Human, testing on Mouse ({data_type}) with {n_bootstraps} bootstraps..."
+                f"  Training on Human, testing on Mouse ({data_type}) with {actual_n_bootstraps} bootstraps ({bootstrap_start}-{bootstrap_end - 1})..."
             )
             bootstrap_aurocs = []
             bootstrap_roc_data = []
             bootstrap_weights = []
 
             np.random.seed(random_seed)
-            for bs_idx in range(n_bootstraps):
+            for bs_idx in bootstrap_range:
                 # Bootstrap sample from human training data
                 bs_indices = resample(
                     np.arange(len(human_X_data)), random_state=random_seed + bs_idx, replace=True
@@ -509,13 +529,13 @@ def evaluate_cross_species(
 
             # Mouse -> Human with bootstrapping
             tqdm.write(
-                f"  Training on Mouse, testing on Human ({data_type}) with {n_bootstraps} bootstraps..."
+                f"  Training on Mouse, testing on Human ({data_type}) with {actual_n_bootstraps} bootstraps ({bootstrap_start}-{bootstrap_end - 1})..."
             )
             bootstrap_aurocs = []
             bootstrap_roc_data = []
             bootstrap_weights = []
 
-            for bs_idx in range(n_bootstraps):
+            for bs_idx in bootstrap_range:
                 # Bootstrap sample from mouse training data
                 bs_indices = resample(
                     np.arange(len(mouse_X_data)),

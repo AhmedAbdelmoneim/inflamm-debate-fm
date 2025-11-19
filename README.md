@@ -73,11 +73,15 @@ make embed-multi-model DATASET=human_burn DEVICE=cuda
 # Or process all datasets:
 make embed-multi-model DEVICE=cuda
 
-# Run within-species probing
+# Run within-species probing (quick test)
 make probe-within SPECIES=human
 
-# Run cross-species probing
+# Run cross-species probing (quick test)
 make probe-cross
+
+# Run complete parallel probing pipeline (recommended for large experiments)
+# This runs both within-species and cross-species with parallel bootstraps
+./scripts/run_probing_parallel.sh --n-bootstraps 100 --n-jobs 10 --use-wandb
 
 # Analyze coefficients
 make analyze-coeffs
@@ -109,7 +113,9 @@ make clean     # Remove compiled Python files
    - Single dataset: `make embed DATASET=<dataset_name>`
    - All configurations: `make embed-all DEVICE=cuda` (generates human-only, mouse-only, and human-ortholog-filtered embeddings)
    - Multi-model embeddings: `make embed-multi-model [DATASET=<dataset_name|all>] DEVICE=cuda` (zero-shot + fine-tuned with mean-pooling, defaults to all datasets)
-4. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
+4. **Probing Experiments**: 
+   - Quick test: `make probe-within SPECIES=human` or `make probe-cross`
+   - Large-scale (parallel): `./scripts/run_probing_parallel.sh --n-bootstraps 100 --n-jobs 10 --use-wandb`
 5. **Fine-tuning (LoRA)**: `make finetune SPECIES=human` (see Fine-tuning section below)
 6. **Coefficient Analysis**: `make analyze-coeffs`
 7. **GSEA Analysis**: `make analyze-gsea`
@@ -171,6 +177,48 @@ sbatch hpc/run_job.sh probe within-species --species human
 ```
 
 **Note:** The container includes PyTorch with CUDA 12.9 support. The host CUDA module is typically not required, but you can load a specific version using the `CUDA_VERSION` environment variable if needed.
+
+### Parallel Probing Pipeline
+
+For large-scale probing experiments with many bootstrap iterations, use the parallel probing script that automatically splits work across multiple jobs:
+
+```bash
+# Run complete pipeline: within-species + parallel cross-species (100 bootstraps, 10 jobs)
+./scripts/run_probing_parallel.sh --n-bootstraps 100 --n-jobs 10 --use-wandb
+
+# Customize options
+./scripts/run_probing_parallel.sh \
+    --n-bootstraps 100 \
+    --n-jobs 10 \
+    --n-cv-folds 10 \
+    --use-wandb
+
+# Skip specific experiments
+./scripts/run_probing_parallel.sh --skip-within  # Only run cross-species
+./scripts/run_probing_parallel.sh --skip-cross   # Only run within-species
+```
+
+**What it does:**
+1. Submits within-species jobs (human + mouse) with 10-fold CV
+2. Splits cross-species bootstraps across multiple parallel jobs
+3. Generates a combine script for merging results
+
+**After jobs complete:**
+```bash
+# The script creates combine_cross_species_results.sh automatically
+./combine_cross_species_results.sh
+
+# Or manually combine:
+./run_apptainer.sh python -m inflamm_debate_fm.cli.combine_bootstrap_results \
+    data/probing_results/cross_species/cross_species_results_combined.pkl \
+    data/probing_results/cross_species/cross_species_results_bs_*.pkl
+```
+
+**Benefits:**
+- **10x faster**: 10 parallel jobs vs 1 sequential job
+- **Scalable**: Adjust number of jobs based on cluster availability
+- **Fault tolerant**: If one job fails, others continue
+- **Automatic**: Single command runs everything
 
 ## Fine-tuning with LoRA
 

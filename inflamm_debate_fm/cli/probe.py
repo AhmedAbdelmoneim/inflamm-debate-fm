@@ -3,12 +3,13 @@
 from pathlib import Path
 import pickle
 
+import anndata as ad
 from loguru import logger
 import typer
 
 from inflamm_debate_fm.cli.utils import get_setup_transforms
 from inflamm_debate_fm.config import DATA_ROOT, get_config
-from inflamm_debate_fm.data.load import load_combined_adatas
+from inflamm_debate_fm.data.load import combine_adatas
 from inflamm_debate_fm.embeddings.multi_model import (
     add_multi_model_embeddings_to_adata,
     detect_available_models,
@@ -27,6 +28,12 @@ def probe_callback(
     ),
     n_bootstraps: int = typer.Option(
         20, "--n-bootstraps", help="Number of bootstrap iterations for cross-species"
+    ),
+    bootstrap_start: int | None = typer.Option(
+        None, "--bootstrap-start", help="Start index for bootstrap range (for parallelization)"
+    ),
+    bootstrap_end: int | None = typer.Option(
+        None, "--bootstrap-end", help="End index for bootstrap range (for parallelization)"
     ),
     embedding_types: str = typer.Option(
         "all", "--embedding-types", help="Comma-separated list of embedding types, or 'all'"
@@ -55,6 +62,8 @@ def probe_callback(
         probe(
             n_cv_folds=n_cv_folds,
             n_bootstraps=n_bootstraps,
+            bootstrap_start=bootstrap_start,
+            bootstrap_end=bootstrap_end,
             embedding_types=embedding_types,
             load_multi_model_embeddings=load_multi_model_embeddings,
             device=device,
@@ -86,10 +95,26 @@ def _load_and_prepare_data(
         Tuple of (combined_adatas dict, embedding_keys list).
     """
     config = get_config()
-    combined_data_dir = DATA_ROOT / config["paths"]["combined_data_dir"]
+    cleaned_data_dir = DATA_ROOT / config["paths"]["anndata_cleaned_dir"]
 
-    logger.info("Loading combined data...")
-    combined_adatas = load_combined_adatas(combined_data_dir)
+    logger.info("Loading cleaned anndata files...")
+    # Load individual cleaned datasets
+    adatas = {}
+    for f in sorted(cleaned_data_dir.glob("*.h5ad")):
+        name = f.stem
+        adatas[name] = ad.read_h5ad(f)
+
+    logger.info(f"Found {len(adatas)} cleaned datasets")
+
+    # Combine by species
+    logger.info("Combining datasets by species...")
+    combined_adatas = {
+        "human": combine_adatas(adatas, "human"),
+        "mouse": combine_adatas(adatas, "mouse"),
+    }
+
+    logger.info(f"Combined human: {combined_adatas['human'].shape}")
+    logger.info(f"Combined mouse: {combined_adatas['mouse'].shape}")
 
     # Load multi-model embeddings if requested and not present
     if load_multi_model_embeddings:
@@ -131,6 +156,8 @@ def _load_and_prepare_data(
 def probe(
     n_cv_folds: int = 10,
     n_bootstraps: int = 20,
+    bootstrap_start: int | None = None,
+    bootstrap_end: int | None = None,
     embedding_types: str = "all",
     load_multi_model_embeddings: bool = True,
     device: str = "cpu",
@@ -266,6 +293,8 @@ def probe(
         mouse_adata=mouse_adata,
         setups=setups,
         n_bootstraps=n_bootstraps,
+        bootstrap_start=bootstrap_start,
+        bootstrap_end=bootstrap_end,
         embedding_keys=embedding_keys,
         save_weights=save_weights,
         weights_output_dir=weights_dir if save_weights else None,
@@ -273,8 +302,13 @@ def probe(
         wandb_run=wandb_run,
     )
 
-    # Save results
-    results_path = cross_species_output_dir / "cross_species_results.pkl"
+    # Save results with bootstrap range in filename if using parallelization
+    if bootstrap_start is not None and bootstrap_end is not None:
+        results_filename = f"cross_species_results_bs_{bootstrap_start}_{bootstrap_end}.pkl"
+    else:
+        results_filename = "cross_species_results.pkl"
+
+    results_path = cross_species_output_dir / results_filename
     with results_path.open("wb") as f:
         pickle.dump(
             {
@@ -424,6 +458,12 @@ def probe_within_species(
 @app.command("cross-species")
 def probe_cross_species(
     n_bootstraps: int = 20,
+    bootstrap_start: int | None = typer.Option(
+        None, "--bootstrap-start", help="Start index for bootstrap range (for parallelization)"
+    ),
+    bootstrap_end: int | None = typer.Option(
+        None, "--bootstrap-end", help="End index for bootstrap range (for parallelization)"
+    ),
     embedding_types: str = "all",
     load_multi_model_embeddings: bool = True,
     device: str = "cpu",
@@ -493,6 +533,8 @@ def probe_cross_species(
         mouse_adata=mouse_adata,
         setups=setups,
         n_bootstraps=n_bootstraps,
+        bootstrap_start=bootstrap_start,
+        bootstrap_end=bootstrap_end,
         embedding_keys=embedding_keys,
         save_weights=save_weights,
         weights_output_dir=weights_dir if save_weights else None,
@@ -500,8 +542,13 @@ def probe_cross_species(
         wandb_run=wandb_run,
     )
 
-    # Save results
-    results_path = output_dir / "cross_species_results.pkl"
+    # Save results with bootstrap range in filename if using parallelization
+    if bootstrap_start is not None and bootstrap_end is not None:
+        results_filename = f"cross_species_results_bs_{bootstrap_start}_{bootstrap_end}.pkl"
+    else:
+        results_filename = "cross_species_results.pkl"
+
+    results_path = output_dir / results_filename
     with results_path.open("wb") as f:
         pickle.dump(
             {
