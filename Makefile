@@ -155,7 +155,7 @@ probe-cross: requirements
 ## Fine-tune model with LoRA
 .PHONY: finetune
 finetune: requirements
-	@echo "Usage: make finetune SPECIES=<human|mouse|combined|universal> [EPOCHS=<50>] [BATCH_SIZE=<8>] [EARLY_STOPPING_PATIENCE=<7>] [USE_WANDB=<true|false>]"
+	@echo "Usage: make finetune SPECIES=<human|mouse|combined|universal> [EPOCHS=<50>] [BATCH_SIZE=<8>] [N_INFLAMMATION=<32>] [N_CONTROL=<32>] [EARLY_STOPPING_PATIENCE=<7>] [USE_WANDB=<true|false>]"
 	@if [ -z "$(SPECIES)" ]; then \
 		echo "Error: SPECIES variable is required"; \
 		echo "Example: make finetune SPECIES=human USE_WANDB=true"; \
@@ -167,6 +167,8 @@ finetune: requirements
 			--epochs $(or $(EPOCHS),50) \
 			--early-stopping-patience $(or $(EARLY_STOPPING_PATIENCE),7) \
 			--batch-size $(or $(BATCH_SIZE),8) \
+			--n-inflammation $(or $(N_INFLAMMATION),32) \
+			--n-control $(or $(N_CONTROL),32) \
 			--contrastive-weight $(or $(CONTRASTIVE_WEIGHT),1.0) \
 			--contrastive-temperature $(or $(CONTRASTIVE_TEMPERATURE),0.07) \
 			--use-wandb; \
@@ -176,6 +178,8 @@ finetune: requirements
 			--epochs $(or $(EPOCHS),50) \
 			--early-stopping-patience $(or $(EARLY_STOPPING_PATIENCE),7) \
 			--batch-size $(or $(BATCH_SIZE),8) \
+			--n-inflammation $(or $(N_INFLAMMATION),32) \
+			--n-control $(or $(N_CONTROL),32) \
 			--contrastive-weight $(or $(CONTRASTIVE_WEIGHT),1.0) \
 			--contrastive-temperature $(or $(CONTRASTIVE_TEMPERATURE),0.07); \
 	fi

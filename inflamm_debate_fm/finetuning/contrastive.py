@@ -97,19 +97,25 @@ def compute_cross_species_contrastive_loss(
         if num_pairs == 0:
             continue
 
-        perm_h = torch.randperm(len(human_subset), device=device)[:num_pairs]
-        perm_m = torch.randperm(len(mouse_subset), device=device)[:num_pairs]
-        selected_h = human_subset[perm_h]
-        selected_m = mouse_subset[perm_m]
+        # Randomly permute both sides together to maintain pairing
+        # We permute indices 0..num_pairs-1 and apply the same permutation to both
+        pair_perm = torch.randperm(num_pairs, device=device)
+        selected_h = human_subset[pair_perm]
+        selected_m = mouse_subset[pair_perm]
 
+        # Find positions of selected samples within their respective in-batch index arrays
+        # These positions will be used as positive labels in the cross-entropy loss
         labels_for_h = _match_positions(selected_m, mouse_inbatch_idx)
         labels_for_m = _match_positions(selected_h, human_inbatch_idx)
         if labels_for_h is None or labels_for_m is None:
             continue
 
+        # Compute logits: similarity between selected samples and all negatives (in-batch + bank)
         logits_h = torch.matmul(normalized_embeddings[selected_h], mouse_all.T) / temperature
         logits_m = torch.matmul(normalized_embeddings[selected_m], human_all.T) / temperature
 
+        # Cross-entropy loss: labels index into the in-batch portion of mouse_all/human_all
+        # (memory bank samples are negatives, so they're at indices >= len(inbatch))
         loss_h = F.cross_entropy(logits_h, labels_for_h)
         loss_m = F.cross_entropy(logits_m, labels_for_m)
 
