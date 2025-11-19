@@ -7,9 +7,7 @@ from loguru import logger
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
 
 from inflamm_debate_fm.bulkformer.embed import (
     adata_to_dataframe,
@@ -18,392 +16,23 @@ from inflamm_debate_fm.bulkformer.embed import (
     load_bulkformer_model,
 )
 from inflamm_debate_fm.config import MODELS_ROOT, get_config
+from inflamm_debate_fm.finetuning.contrastive import (
+    MEMORY_BANK_SIZE,
+    SPECIES_TO_ID,
+    get_species_tensor,
+)
 from inflamm_debate_fm.finetuning.data import prepare_finetuning_data, save_finetuning_metadata
 from inflamm_debate_fm.finetuning.lora import apply_lora_to_bulkformer, save_lora_checkpoint
+from inflamm_debate_fm.finetuning.model_utils import (
+    build_classification_head,
+    get_model_embedding_dim,
+    get_model_gb_repeat,
+)
+from inflamm_debate_fm.finetuning.training_loops import (
+    train_classification_epoch,
+    train_contrastive_epoch,
+)
 from inflamm_debate_fm.utils.wandb_utils import init_wandb
-
-SPECIES_TO_ID = {"human": 0, "mouse": 1}
-MEMORY_BANK_SIZE = 1024
-
-
-def _get_species_tensor(adata, fallback_label: str) -> torch.Tensor:
-    """Return tensor encoding species IDs aligned with adata rows."""
-    fallback = fallback_label.lower()
-    if "species" in adata.obs.columns:
-        species_series = adata.obs["species"].astype(str)
-        species_series = species_series.replace("nan", fallback_label)
-        labels = species_series.str.lower().tolist()
-    else:
-        labels = [fallback] * adata.shape[0]
-
-    mapped = [SPECIES_TO_ID.get(label, -1) for label in labels]
-    return torch.tensor(mapped, dtype=torch.long)
-
-
-def _match_positions(
-    selected_indices: torch.Tensor, all_indices: torch.Tensor
-) -> torch.Tensor | None:
-    """Map selected global indices to their positions inside a reference index tensor."""
-    if all_indices.numel() == 0 or selected_indices.numel() == 0:
-        return None
-
-    eq = selected_indices.unsqueeze(1) == all_indices.unsqueeze(0)
-    if not torch.all(eq.any(dim=1)):
-        return None
-
-    return eq.to(dtype=torch.int64).argmax(dim=1)
-
-
-def _shuffle_indices(indices: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
-    if indices.numel() == 0:
-        return indices
-    perm = torch.randperm(indices.numel(), generator=generator)
-    return indices[perm]
-
-
-def _build_cross_species_batch_indices(
-    labels: torch.Tensor,
-    species_ids: torch.Tensor,
-    batch_size: int,
-    seed: int,
-) -> list[list[int]]:
-    if batch_size % 2 != 0:
-        raise ValueError("Cross-species contrastive mode requires an even batch size.")
-
-    generator = torch.Generator()
-    generator.manual_seed(seed)
-
-    human_mask = species_ids == SPECIES_TO_ID["human"]
-    mouse_mask = species_ids == SPECIES_TO_ID["mouse"]
-
-    def split_indices(label_value: int, mask: torch.Tensor) -> torch.Tensor:
-        return torch.where(mask & (labels == label_value))[0]
-
-    human_infl = _shuffle_indices(split_indices(1, human_mask), generator)
-    mouse_infl = _shuffle_indices(split_indices(1, mouse_mask), generator)
-    human_ctrl = _shuffle_indices(split_indices(0, human_mask), generator)
-    mouse_ctrl = _shuffle_indices(split_indices(0, mouse_mask), generator)
-
-    def make_pairs(h_array: torch.Tensor, m_array: torch.Tensor):
-        n_pairs = min(h_array.numel(), m_array.numel())
-        pairs = [[int(h_array[i].item()), int(m_array[i].item())] for i in range(n_pairs)]
-        h_remaining = h_array[n_pairs:]
-        m_remaining = m_array[n_pairs:]
-        return pairs, h_remaining, m_remaining
-
-    infl_pairs, human_infl_left, mouse_infl_left = make_pairs(human_infl, mouse_infl)
-    ctrl_pairs, human_ctrl_left, mouse_ctrl_left = make_pairs(human_ctrl, mouse_ctrl)
-
-    all_pairs = infl_pairs + ctrl_pairs
-    if all_pairs:
-        order = torch.randperm(len(all_pairs), generator=generator).tolist()
-        all_pairs = [all_pairs[i] for i in order]
-
-    batches: list[list[int]] = []
-    pairs_per_batch = batch_size // 2
-    for i in range(0, len(all_pairs), pairs_per_batch):
-        pair_chunk = all_pairs[i : i + pairs_per_batch]
-        if not pair_chunk:
-            continue
-        batch = [idx for pair in pair_chunk for idx in pair]
-        batches.append(batch)
-
-    remaining = torch.cat(
-        [
-            human_infl_left,
-            mouse_infl_left,
-            human_ctrl_left,
-            mouse_ctrl_left,
-        ]
-    )
-    if remaining.numel() > 0:
-        remaining = _shuffle_indices(remaining, generator)
-        for i in range(0, remaining.numel(), batch_size):
-            batch_tensor = remaining[i : i + batch_size]
-            if batch_tensor.numel() > 0:
-                batches.append(batch_tensor.tolist())
-
-    return batches
-
-
-def _iter_cross_species_batches(
-    X_tensor: torch.Tensor,
-    y_tensor: torch.Tensor,
-    species_tensor: torch.Tensor,
-    batch_indices: list[list[int]],
-    device: torch.device,
-):
-    for indices in batch_indices:
-        idx_tensor = torch.tensor(indices, dtype=torch.long)
-        yield (
-            X_tensor.index_select(0, idx_tensor).to(device),
-            y_tensor.index_select(0, idx_tensor).to(device),
-            species_tensor.index_select(0, idx_tensor).to(device),
-        )
-
-
-def _compute_cross_species_contrastive_loss(
-    normalized_embeddings: torch.Tensor,
-    labels: torch.Tensor,
-    species_ids: torch.Tensor,
-    temperature: float,
-    human_bank: deque | None = None,
-    mouse_bank: deque | None = None,
-) -> torch.Tensor | None:
-    """Compute InfoNCE loss where positives are cross-species inflammation pairs."""
-    device = normalized_embeddings.device
-    human_mask = species_ids == SPECIES_TO_ID["human"]
-    mouse_mask = species_ids == SPECIES_TO_ID["mouse"]
-
-    if human_mask.sum() == 0 or mouse_mask.sum() == 0:
-        return None
-
-    device = normalized_embeddings.device
-    human_all_idx = torch.where(human_mask)[0]
-    mouse_all_idx = torch.where(mouse_mask)[0]
-    human_inbatch = normalized_embeddings[human_all_idx]
-    mouse_inbatch = normalized_embeddings[mouse_all_idx]
-
-    if human_bank and len(human_bank) > 0:
-        human_bank_tensor = torch.stack(list(human_bank), dim=0).to(device)
-        human_all = torch.cat([human_inbatch, human_bank_tensor], dim=0)
-    else:
-        human_all = human_inbatch
-
-    if mouse_bank and len(mouse_bank) > 0:
-        mouse_bank_tensor = torch.stack(list(mouse_bank), dim=0).to(device)
-        mouse_all = torch.cat([mouse_inbatch, mouse_bank_tensor], dim=0)
-    else:
-        mouse_all = mouse_inbatch
-
-    total_loss = 0.0
-    component_count = 0
-
-    for target_label in (1, 0):  # 1 = inflammation, 0 = control
-        human_subset = torch.where(human_mask & (labels == target_label))[0]
-        mouse_subset = torch.where(mouse_mask & (labels == target_label))[0]
-
-        if len(human_subset) == 0 or len(mouse_subset) == 0:
-            continue
-
-        num_pairs = min(len(human_subset), len(mouse_subset))
-        if num_pairs == 0:
-            continue
-
-        perm_h = torch.randperm(len(human_subset), device=device)[:num_pairs]
-        perm_m = torch.randperm(len(mouse_subset), device=device)[:num_pairs]
-        selected_h = human_subset[perm_h]
-        selected_m = mouse_subset[perm_m]
-
-        labels_for_h = _match_positions(selected_m, mouse_all_idx)
-        labels_for_m = _match_positions(selected_h, human_all_idx)
-        if labels_for_h is None or labels_for_m is None:
-            continue
-
-        logits_h = torch.matmul(normalized_embeddings[selected_h], mouse_all.T) / temperature
-        logits_m = torch.matmul(normalized_embeddings[selected_m], human_all.T) / temperature
-
-        loss_h = F.cross_entropy(logits_h, labels_for_h)
-        loss_m = F.cross_entropy(logits_m, labels_for_m)
-
-        total_loss += 0.5 * (loss_h + loss_m)
-        component_count += 1
-
-    if component_count == 0:
-        return None
-
-    return total_loss / component_count
-
-
-def _build_classification_head(embedding_dim: int, device: torch.device) -> nn.Module:
-    return nn.Sequential(
-        nn.Linear(embedding_dim, 128),
-        nn.ReLU(),
-        nn.Dropout(0.1),
-        nn.Linear(128, 2),
-    ).to(device)
-
-
-def _train_classification_epoch(
-    *,
-    model: torch.nn.Module,
-    classification_head: nn.Module,
-    dataloader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
-    device: torch.device,
-    gb_repeat: int,
-    max_grad_norm: float,
-    use_wandb: bool,
-    wandb_run,
-    epoch: int,
-    n_epochs: int,
-    trainable_params: list[torch.nn.Parameter],
-) -> float:
-    epoch_losses: list[float] = []
-    classification_head.train()
-    model.train()
-
-    progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{n_epochs}")
-    for batch_idx, (X_batch, y_batch, _) in enumerate(progress_bar):
-        X_batch = X_batch.to(device)
-        y_batch = y_batch.to(device)
-
-        optimizer.zero_grad()
-        output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
-        gene_embeddings = hidden[gb_repeat - 1]
-        del output, hidden
-
-        sample_embeddings = gene_embeddings.mean(dim=1)
-        logits = classification_head(sample_embeddings)
-        loss = criterion(logits, y_batch)
-
-        if torch.isnan(loss) or torch.isinf(loss):
-            logger.error(
-                f"NaN/Inf loss detected at epoch {epoch + 1}, batch {batch_idx}. "
-                f"Loss value: {loss.item()}"
-            )
-            optimizer.zero_grad()
-            continue
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
-        optimizer.step()
-
-        loss_value = loss.item()
-        epoch_losses.append(loss_value)
-        progress_bar.set_postfix({"loss": loss_value})
-
-        del gene_embeddings, sample_embeddings, logits, loss
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        if use_wandb and wandb_run:
-            wandb_run.log(
-                {"batch_loss": loss_value, "classification_loss": loss_value, "epoch": epoch}
-            )
-
-    avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("inf")
-    return avg_loss
-
-
-def _train_contrastive_epoch(
-    *,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    X_tensor: torch.Tensor,
-    y_tensor: torch.Tensor,
-    species_tensor: torch.Tensor,
-    batch_size: int,
-    random_seed: int,
-    epoch: int,
-    n_epochs: int,
-    device: torch.device,
-    gb_repeat: int,
-    max_grad_norm: float,
-    human_bank: deque[torch.Tensor],
-    mouse_bank: deque[torch.Tensor],
-    use_wandb: bool,
-    wandb_run,
-    contrastive_weight: float,
-    contrastive_temperature: float,
-    trainable_params: list[torch.nn.Parameter],
-) -> tuple[float, float | None]:
-    epoch_losses: list[float] = []
-    epoch_contrastive_losses: list[float] = []
-    model.train()
-
-    batch_indices = _build_cross_species_batch_indices(
-        labels=y_tensor,
-        species_ids=species_tensor,
-        batch_size=batch_size,
-        seed=random_seed + epoch,
-    )
-    iterable = _iter_cross_species_batches(
-        X_tensor=X_tensor,
-        y_tensor=y_tensor,
-        species_tensor=species_tensor,
-        batch_indices=batch_indices,
-        device=device,
-    )
-    progress_bar = tqdm(iterable, total=len(batch_indices), desc=f"Epoch {epoch + 1}/{n_epochs}")
-
-    for batch_idx, (X_batch, y_batch, species_batch) in enumerate(progress_bar):
-        optimizer.zero_grad()
-        output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
-        gene_embeddings = hidden[gb_repeat - 1]
-        del output, hidden
-
-        sample_embeddings = gene_embeddings.mean(dim=1)
-        normalized_embeddings = F.normalize(sample_embeddings, p=2, dim=1)
-        contrastive_component = _compute_cross_species_contrastive_loss(
-            normalized_embeddings,
-            y_batch,
-            species_batch,
-            contrastive_temperature,
-            human_bank=human_bank,
-            mouse_bank=mouse_bank,
-        )
-
-        if contrastive_component is None:
-            logger.debug("Skipped batch (insufficient cross-species pairs for contrastive loss).")
-            optimizer.zero_grad()
-            with torch.no_grad():
-                for vec, species_id in zip(normalized_embeddings, species_batch):
-                    if species_id.item() == SPECIES_TO_ID["human"]:
-                        human_bank.append(vec.detach().cpu())
-                    elif species_id.item() == SPECIES_TO_ID["mouse"]:
-                        mouse_bank.append(vec.detach().cpu())
-            del gene_embeddings, sample_embeddings, normalized_embeddings
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-            continue
-
-        loss = contrastive_weight * contrastive_component
-        if torch.isnan(loss) or torch.isinf(loss):
-            logger.error(
-                f"NaN/Inf contrastive loss at epoch {epoch + 1}, batch {batch_idx}: {loss.item()}"
-            )
-            optimizer.zero_grad()
-            del gene_embeddings, sample_embeddings, normalized_embeddings
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-            continue
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
-        optimizer.step()
-
-        loss_value = loss.item()
-        contrastive_loss_value = contrastive_component.item()
-        epoch_losses.append(loss_value)
-        epoch_contrastive_losses.append(contrastive_loss_value)
-        progress_bar.set_postfix({"loss": loss_value, "contrastive": contrastive_loss_value})
-
-        with torch.no_grad():
-            for vec, species_id in zip(normalized_embeddings, species_batch):
-                if species_id.item() == SPECIES_TO_ID["human"]:
-                    human_bank.append(vec.detach().cpu())
-                elif species_id.item() == SPECIES_TO_ID["mouse"]:
-                    mouse_bank.append(vec.detach().cpu())
-
-        del gene_embeddings, sample_embeddings, normalized_embeddings, loss, contrastive_component
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-        if use_wandb and wandb_run:
-            wandb_run.log(
-                {
-                    "batch_loss": loss_value,
-                    "contrastive_loss": contrastive_loss_value,
-                    "epoch": epoch,
-                }
-            )
-    avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("inf")
-    avg_contrastive = (
-        float(np.mean(epoch_contrastive_losses)) if epoch_contrastive_losses else None
-    )
-    return avg_loss, avg_contrastive
 
 
 def train_lora_model(
@@ -526,7 +155,7 @@ def train_lora_model(
     fallback_species = (
         "human" if species == "human" else "mouse" if species == "mouse" else "unknown"
     )
-    species_tensor = _get_species_tensor(adata, fallback_species)
+    species_tensor = get_species_tensor(adata, fallback_species)
 
     if training_mode == "cross_contrastive":
         human_count = int((species_tensor == SPECIES_TO_ID["human"]).sum().item())
@@ -566,24 +195,16 @@ def train_lora_model(
             f"GPU memory after loading model: {torch.cuda.memory_allocated(0) / 1024**3:.2f} GB / {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
         )
 
-    # Add classification head: aggregate gene-level embeddings to sample-level
-    # Get embedding dimension and gb_repeat from model config (do this once, not in loop)
-    # Access base_model if wrapped by PEFT
-    unwrapped_model = model.get_base_model() if hasattr(model, "get_base_model") else model
-    # Unwrap BulkFormerPEFTWrapper if present
-    if hasattr(unwrapped_model, "base_model"):
-        actual_base = unwrapped_model.base_model
-    else:
-        actual_base = unwrapped_model
-    gb_repeat = actual_base.gb_repeat if hasattr(actual_base, "gb_repeat") else 3
+    # Get model configuration
+    gb_repeat = get_model_gb_repeat(model)
 
     # Prepare trainable parameters and optional classification head
     trainable_params = list(model.parameters())
     classification_head: nn.Module | None = None
     criterion: nn.Module | None = None
     if training_mode == "classification":
-        embedding_dim = actual_base.dim if hasattr(actual_base, "dim") else 640
-        classification_head = _build_classification_head(embedding_dim, device_obj)
+        embedding_dim = get_model_embedding_dim(model)
+        classification_head = build_classification_head(embedding_dim, device_obj)
         criterion = nn.CrossEntropyLoss()
         trainable_params += list(classification_head.parameters())
 
@@ -645,7 +266,7 @@ def train_lora_model(
         if training_mode == "cross_contrastive":
             if human_bank is None or mouse_bank is None:
                 raise RuntimeError("Contrastive mode requires initialized memory banks.")
-            avg_loss, avg_contrastive_loss = _train_contrastive_epoch(
+            avg_loss, avg_contrastive_loss = train_contrastive_epoch(
                 model=model,
                 optimizer=optimizer,
                 X_tensor=X_tensor,
@@ -671,7 +292,7 @@ def train_lora_model(
                 raise RuntimeError(
                     "Classification mode requires dataloader and classification head."
                 )
-            avg_loss = _train_classification_epoch(
+            avg_loss = train_classification_epoch(
                 model=model,
                 classification_head=classification_head,
                 dataloader=dataloader,
