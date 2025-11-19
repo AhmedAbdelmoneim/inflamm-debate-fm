@@ -299,14 +299,16 @@ def evaluate_within_species(
                     if fold_weights:
                         all_weights["CrossValidation"][model_type][full_key] = fold_weights
 
-                    # Log ROC curves to wandb
+                    # Log ROC curves to wandb (only for final summary, not during parallel execution)
                     if use_wandb and wandb_run and fold_roc_data:
-                        _log_roc_curves(
-                            fold_roc_data,
-                            wandb_run,
-                            f"{species_name}/{setup_name}/{model_type}/{data_type}/cv",
-                            f"CV ROC: {setup_name} ({model_type}, {data_type})",
-                        )
+                        # Only log if we have reasonable number of curves (not too many)
+                        if len(fold_roc_data) <= 20:  # Limit to avoid too many images
+                            _log_roc_curves(
+                                fold_roc_data,
+                                wandb_run,
+                                f"{species_name}/{setup_name}/{model_type}/{data_type}/cv",
+                                f"CV ROC: {setup_name} ({model_type}, {data_type})",
+                            )
 
                 except Exception as e:
                     tqdm.write(f"  CV Error: {e}")
@@ -357,8 +359,8 @@ def evaluate_within_species(
                             },
                             context=f"LODO {model_type} {data_type}",
                         )
-                        # Log ROC curves
-                        if temp_roc_data_lodo:
+                        # Log ROC curves (LODO typically has few curves, so safe to log)
+                        if temp_roc_data_lodo and len(temp_roc_data_lodo) <= 20:
                             _log_roc_curves(
                                 temp_roc_data_lodo,
                                 wandb_run,
@@ -381,7 +383,8 @@ def evaluate_within_species(
                         if isinstance(value, tuple) and len(value) == 2 and not np.isnan(value[0]):
                             results_subset[key] = value
 
-                    if results_subset:
+                    # Log AUROC comparison charts (summary only, not too frequent)
+                    if results_subset and len(results_subset) > 0:
                         _log_auroc_comparison(
                             results_subset,
                             wandb_run,
@@ -424,7 +427,8 @@ def evaluate_cross_species(
         Tuple of (all_results, all_roc_data, all_weights) dictionaries.
     """
     config = get_config()
-    n_bootstraps = config.get("model", {}).get("n_bootstraps", n_bootstraps)
+    # Use n_bootstraps from parameter (CLI argument), not config
+    # Config value is just a default, but CLI argument takes precedence
     random_seed = config.get("model", {}).get("random_seed", 42)
 
     # Handle bootstrap range for parallelization
@@ -551,7 +555,7 @@ def evaluate_cross_species(
                 if bootstrap_weights:
                     all_weights[key] = bootstrap_weights
 
-                # Log to wandb
+                # Log to wandb (skip ROC curves for parallel jobs to reduce upload load)
                 if use_wandb and wandb_run:
                     _safe_wandb_log(
                         wandb_run,
@@ -561,8 +565,8 @@ def evaluate_cross_species(
                         },
                         context=f"Cross-species Human→Mouse {key}",
                     )
-                    # Log ROC curves
-                    if bootstrap_roc_data:
+                    # Only log ROC curves if not a parallel job (to reduce upload load)
+                    if bootstrap_roc_data and bootstrap_start is None and bootstrap_end is None:
                         _log_roc_curves(
                             bootstrap_roc_data,
                             wandb_run,
@@ -616,7 +620,7 @@ def evaluate_cross_species(
                 if bootstrap_weights:
                     all_weights[key] = bootstrap_weights
 
-                # Log to wandb
+                # Log to wandb (skip ROC curves for parallel jobs to reduce upload load)
                 if use_wandb and wandb_run:
                     _safe_wandb_log(
                         wandb_run,
@@ -626,8 +630,8 @@ def evaluate_cross_species(
                         },
                         context=f"Cross-species Mouse→Human {key}",
                     )
-                    # Log ROC curves
-                    if bootstrap_roc_data:
+                    # Only log ROC curves if not a parallel job (to reduce upload load)
+                    if bootstrap_roc_data and bootstrap_start is None and bootstrap_end is None:
                         _log_roc_curves(
                             bootstrap_roc_data,
                             wandb_run,
@@ -644,7 +648,8 @@ def evaluate_cross_species(
                 for k, v in all_results.items()
                 if k.endswith(f"::{data_type}") and isinstance(v, dict) and "mean" in v
             }
-            if results_subset:
+            # Only log comparison charts if not a parallel job (to reduce upload load)
+            if results_subset and bootstrap_start is None and bootstrap_end is None:
                 _log_auroc_comparison(
                     {k: (v["mean"], v["std"]) for k, v in results_subset.items()},
                     wandb_run,

@@ -376,7 +376,7 @@ def probe(
 
 @app.command("within-species")
 def probe_within_species(
-    species: str,
+    species: str = typer.Option(..., "--species", help="Species name ('human' or 'mouse')"),
     n_cv_folds: int = 10,
     embedding_types: str = "all",
     load_multi_model_embeddings: bool = True,
