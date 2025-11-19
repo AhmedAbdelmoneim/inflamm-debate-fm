@@ -216,12 +216,41 @@ def load_lora_checkpoint(
     if base_model is None:
         base_model = load_bulkformer_model(device=device)
 
+    # Wrap base model to make it compatible with PEFT's expected forward signature
+    # This must be done before loading PEFT checkpoint
+    if not isinstance(base_model, BulkFormerPEFTWrapper):
+        # Check if base_model is already wrapped by PEFT (shouldn't happen, but be safe)
+        if hasattr(base_model, "base_model") and isinstance(
+            base_model.base_model, BulkFormerPEFTWrapper
+        ):
+            wrapped_base = base_model
+        else:
+            wrapped_base = BulkFormerPEFTWrapper(base_model)
+    else:
+        wrapped_base = base_model
+
     # Load LoRA weights
     if checkpoint_path.is_dir():
         # PEFT checkpoint directory
         from peft import PeftModel
 
-        model = PeftModel.from_pretrained(base_model, str(checkpoint_path))
+        model = PeftModel.from_pretrained(wrapped_base, str(checkpoint_path))
+
+        # Verify that the wrapper is preserved in the PEFT structure
+        # PEFT might access model.base_model.model, so we need to ensure that's wrapped
+        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+            if not isinstance(model.base_model.model, BulkFormerPEFTWrapper):
+                # PEFT unwrapped our wrapper, re-apply it
+                logger.warning(
+                    "PEFT unwrapped BulkFormerPEFTWrapper. Re-applying wrapper to ensure compatibility."
+                )
+                # Get the underlying BulkFormer model
+                underlying_model = model.base_model.model
+                # Re-wrap it
+                wrapped_underlying = BulkFormerPEFTWrapper(underlying_model)
+                # Replace it in the PEFT structure
+                model.base_model.model = wrapped_underlying
+
         logger.info(f"Loaded LoRA checkpoint from {checkpoint_path}")
     else:
         # State dict file
