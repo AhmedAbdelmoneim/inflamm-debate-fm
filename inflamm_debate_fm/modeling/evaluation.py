@@ -17,6 +17,24 @@ from inflamm_debate_fm.config import get_config
 from inflamm_debate_fm.modeling.pipelines import get_linear_pipelines, get_nonlinear_pipelines
 
 
+def _safe_wandb_log(wandb_run, data: dict, context: str = "") -> None:
+    """Safely log data to wandb, catching network/certificate errors.
+
+    Args:
+        wandb_run: Wandb run object (can be None).
+        data: Dictionary of data to log.
+        context: Optional context string for error messages.
+    """
+    if wandb_run is None:
+        return
+
+    try:
+        wandb_run.log(data)
+    except Exception as e:
+        context_str = f" ({context})" if context else ""
+        tqdm.write(f"Warning: Failed to log to wandb{context_str}: {e}")
+
+
 def _log_roc_curves(
     roc_data: list[tuple],
     wandb_run,
@@ -31,27 +49,31 @@ def _log_roc_curves(
         key: Key for logging.
         title: Optional title for the plot.
     """
-    if not roc_data:
+    if not roc_data or wandb_run is None:
         return
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(8, 6))
+    try:
+        # Create figure
+        fig, ax = plt.subplots(figsize=(8, 6))
 
-    # Plot all ROC curves
-    for fpr, tpr in roc_data:
-        ax.plot(fpr, tpr, alpha=0.5, linewidth=1)
+        # Plot all ROC curves
+        for fpr, tpr in roc_data:
+            ax.plot(fpr, tpr, alpha=0.5, linewidth=1)
 
-    # Plot diagonal line
-    ax.plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.5, label="Random")
+        # Plot diagonal line
+        ax.plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.5, label="Random")
 
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title(title or f"ROC Curves: {key}")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+        ax.set_xlabel("False Positive Rate")
+        ax.set_ylabel("True Positive Rate")
+        ax.set_title(title or f"ROC Curves: {key}")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
 
-    wandb_run.log({f"{key}/roc_curves": wandb.Image(fig)})
-    plt.close(fig)
+        _safe_wandb_log(wandb_run, {f"{key}/roc_curves": wandb.Image(fig)}, context="ROC curves")
+        plt.close(fig)
+    except Exception as e:
+        tqdm.write(f"Warning: Failed to create/log ROC curves to wandb: {e}")
+        plt.close("all")  # Close any open figures
 
 
 def _log_auroc_comparison(
@@ -68,41 +90,47 @@ def _log_auroc_comparison(
         key: Key for logging.
         title: Optional title for the plot.
     """
-    if not results_dict:
+    if not results_dict or wandb_run is None:
         return
 
-    # Prepare data
-    setups = []
-    means = []
-    stds = []
+    try:
+        # Prepare data
+        setups = []
+        means = []
+        stds = []
 
-    for setup_key, value in results_dict.items():
-        if isinstance(value, tuple) and len(value) == 2:
-            if not np.isnan(value[0]):
-                setups.append(setup_key.replace("::", " - "))
-                means.append(value[0])
-                stds.append(value[1])
+        for setup_key, value in results_dict.items():
+            if isinstance(value, tuple) and len(value) == 2:
+                if not np.isnan(value[0]):
+                    setups.append(setup_key.replace("::", " - "))
+                    means.append(value[0])
+                    stds.append(value[1])
 
-    if not setups:
-        return
+        if not setups:
+            return
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, max(6, len(setups) * 0.5)))
+        # Create figure
+        fig, ax = plt.subplots(figsize=(12, max(6, len(setups) * 0.5)))
 
-    y_pos = np.arange(len(setups))
-    ax.barh(y_pos, means, xerr=stds, capsize=5, alpha=0.7)
-    ax.axvline(0.5, color="red", linestyle="--", linewidth=1, alpha=0.5, label="Random (0.5)")
+        y_pos = np.arange(len(setups))
+        ax.barh(y_pos, means, xerr=stds, capsize=5, alpha=0.7)
+        ax.axvline(0.5, color="red", linestyle="--", linewidth=1, alpha=0.5, label="Random (0.5)")
 
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(setups)
-    ax.set_xlabel("AUROC")
-    ax.set_xlim(0, 1.05)
-    ax.set_title(title or f"AUROC Comparison: {key}")
-    ax.legend()
-    ax.grid(True, alpha=0.3, axis="x")
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(setups)
+        ax.set_xlabel("AUROC")
+        ax.set_xlim(0, 1.05)
+        ax.set_title(title or f"AUROC Comparison: {key}")
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis="x")
 
-    wandb_run.log({f"{key}/auroc_comparison": wandb.Image(fig)})
-    plt.close(fig)
+        _safe_wandb_log(
+            wandb_run, {f"{key}/auroc_comparison": wandb.Image(fig)}, context="AUROC comparison"
+        )
+        plt.close(fig)
+    except Exception as e:
+        tqdm.write(f"Warning: Failed to create/log AUROC comparison to wandb: {e}")
+        plt.close("all")  # Close any open figures
 
 
 def _extract_model_weights(pipe, data_type: str, feature_names: np.ndarray | None = None):
@@ -241,11 +269,13 @@ def evaluate_within_species(
 
                     # Log to wandb
                     if use_wandb and wandb_run:
-                        wandb_run.log(
+                        _safe_wandb_log(
+                            wandb_run,
                             {
                                 f"{species_name}/{setup_name}/{model_type}/{data_type}/cv_auroc_mean": mean_score,
                                 f"{species_name}/{setup_name}/{model_type}/{data_type}/cv_auroc_std": std_score,
-                            }
+                            },
+                            context=f"CV {model_type} {data_type}",
                         )
 
                     # Store ROC for all folds and weights
@@ -319,11 +349,13 @@ def evaluate_within_species(
 
                     # Log to wandb
                     if use_wandb and wandb_run:
-                        wandb_run.log(
+                        _safe_wandb_log(
+                            wandb_run,
                             {
                                 f"{species_name}/{setup_name}/{model_type}/{data_type}/lodo_auroc_mean": mean_lodo,
                                 f"{species_name}/{setup_name}/{model_type}/{data_type}/lodo_auroc_std": std_lodo,
-                            }
+                            },
+                            context=f"LODO {model_type} {data_type}",
                         )
                         # Log ROC curves
                         if temp_roc_data_lodo:
@@ -521,11 +553,13 @@ def evaluate_cross_species(
 
                 # Log to wandb
                 if use_wandb and wandb_run:
-                    wandb_run.log(
+                    _safe_wandb_log(
+                        wandb_run,
                         {
                             f"cross_species/{key}/auroc_mean": np.mean(bootstrap_aurocs),
                             f"cross_species/{key}/auroc_std": np.std(bootstrap_aurocs),
-                        }
+                        },
+                        context=f"Cross-species Human→Mouse {key}",
                     )
                     # Log ROC curves
                     if bootstrap_roc_data:
@@ -584,11 +618,13 @@ def evaluate_cross_species(
 
                 # Log to wandb
                 if use_wandb and wandb_run:
-                    wandb_run.log(
+                    _safe_wandb_log(
+                        wandb_run,
                         {
                             f"cross_species/{key}/auroc_mean": np.mean(bootstrap_aurocs),
                             f"cross_species/{key}/auroc_std": np.std(bootstrap_aurocs),
-                        }
+                        },
+                        context=f"Cross-species Mouse→Human {key}",
                     )
                     # Log ROC curves
                     if bootstrap_roc_data:
