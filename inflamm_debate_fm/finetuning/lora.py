@@ -33,6 +33,7 @@ class _MinimalBulkFormerConfig:
     model_type: str = "bulkformer"
     is_encoder_decoder: bool = False
     torch_dtype: torch.dtype = torch.float32
+    use_return_dict: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
