@@ -119,6 +119,23 @@ embed-all: requirements
 		fi; \
 	fi
 
+## Generate multi-model embeddings (zero-shot + fine-tuned) with mean-pooling
+.PHONY: embed-multi-model
+embed-multi-model: requirements
+	@echo "Usage: make embed-multi-model [DATASET=<dataset_name|all>] [DEVICE=<cpu|cuda>] [BATCH_SIZE=<4>]"
+	@echo "Note: Uses batch_size=4 by default for CUDA memory optimization"
+	@echo "      If DATASET is not specified or set to 'all', processes all datasets"
+	@# Set PyTorch CUDA allocator config to reduce fragmentation
+	@if [ "$(or $(DEVICE),cpu)" = "cuda" ]; then \
+		PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed multi-model $(or $(DATASET),all) \
+			--device cuda \
+			--batch-size $(or $(BATCH_SIZE),4); \
+	else \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed multi-model $(or $(DATASET),all) \
+			--device cpu \
+			--batch-size $(or $(BATCH_SIZE),4); \
+	fi
+
 ## Run within-species probing experiments
 .PHONY: probe-within
 probe-within: requirements

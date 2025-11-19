@@ -68,6 +68,11 @@ make embed DATASET=human_burn
 # Generate embeddings for all configurations (human-only, mouse-only, human-ortholog-filtered)
 make embed-all DEVICE=cuda USE_WANDB=true
 
+# Generate multi-model embeddings (zero-shot + fine-tuned) with mean-pooling
+make embed-multi-model DATASET=human_burn DEVICE=cuda
+# Or process all datasets:
+make embed-multi-model DEVICE=cuda
+
 # Run within-species probing
 make probe-within SPECIES=human
 
@@ -103,6 +108,7 @@ make clean     # Remove compiled Python files
 3. **Embedding Generation**: 
    - Single dataset: `make embed DATASET=<dataset_name>`
    - All configurations: `make embed-all DEVICE=cuda` (generates human-only, mouse-only, and human-ortholog-filtered embeddings)
+   - Multi-model embeddings: `make embed-multi-model [DATASET=<dataset_name|all>] DEVICE=cuda` (zero-shot + fine-tuned with mean-pooling, defaults to all datasets)
 4. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
 5. **Fine-tuning (LoRA)**: `make finetune SPECIES=human` (see Fine-tuning section below)
 6. **Coefficient Analysis**: `make analyze-coeffs`
@@ -152,6 +158,10 @@ sbatch hpc/run_job.sh preprocess data
 sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
 # For large datasets, use chunk-size to avoid OOM (processes samples in chunks)
 sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed all-configs --device cuda --batch-size 16 --chunk-size 2000 --use-wandb
+# Multi-model embeddings (zero-shot + fine-tuned) with mean-pooling
+sbatch --gpus=h100:1 --time=12:00:00 --mem=32G hpc/run_job.sh embed multi-model human_burn --device cuda --batch-size 4
+# Or process all datasets:
+sbatch --gpus=h100:1 --time=24:00:00 --mem=64G hpc/run_job.sh embed multi-model all --device cuda --batch-size 4
 
 # If you need a specific CUDA module version on the host:
 CUDA_VERSION=12.9 sbatch --gpus=h100:1 hpc/run_job.sh embed generate human_burn --device cuda
@@ -229,6 +239,33 @@ done
 ### Using Fine-tuned Models
 
 Fine-tuned models can be loaded and used alongside the zero-shot model for probing experiments. The sample metadata files (`finetuning_samples_{species}.csv`) should be used to exclude fine-tuning samples from evaluation datasets.
+
+### Multi-Model Embeddings
+
+After fine-tuning, generate mean-pooled sample-level embeddings from all available models (zero-shot + fine-tuned):
+
+```bash
+# Generate multi-model embeddings for a single dataset
+python -m inflamm_debate_fm.cli embed multi-model human_burn --device cuda --batch-size 4
+
+# Or process all datasets
+python -m inflamm_debate_fm.cli embed multi-model all --device cuda --batch-size 4
+
+# Or using Make (defaults to all datasets if DATASET not specified)
+make embed-multi-model DATASET=human_burn DEVICE=cuda
+make embed-multi-model DEVICE=cuda  # Processes all datasets
+```
+
+This command:
+- Automatically detects available models (zero-shot + fine-tuned)
+- Generates mean-pooled sample-level embeddings from each model
+- Saves embeddings to the AnnData file in `obsm` with keys:
+  - `X_zero_shot`: Zero-shot model embeddings
+  - `X_human`: Human fine-tuned model embeddings (if available)
+  - `X_mouse`: Mouse fine-tuned model embeddings (if available)
+  - `X_combined`: Combined fine-tuned model embeddings (if available)
+
+The embeddings are ready for probing analysis. Uses `batch_size=4` by default for CUDA memory optimization.
 
 ## Additional Resources
 
