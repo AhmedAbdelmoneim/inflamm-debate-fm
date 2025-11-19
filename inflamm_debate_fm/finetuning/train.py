@@ -52,6 +52,94 @@ def _match_positions(
     return eq.to(dtype=torch.int64).argmax(dim=1)
 
 
+def _shuffle_indices(indices: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    if indices.numel() == 0:
+        return indices
+    perm = torch.randperm(indices.numel(), generator=generator)
+    return indices[perm]
+
+
+def _build_cross_species_batch_indices(
+    labels: torch.Tensor,
+    species_ids: torch.Tensor,
+    batch_size: int,
+    seed: int,
+) -> list[list[int]]:
+    if batch_size % 2 != 0:
+        raise ValueError("Cross-species contrastive mode requires an even batch size.")
+
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    human_mask = species_ids == SPECIES_TO_ID["human"]
+    mouse_mask = species_ids == SPECIES_TO_ID["mouse"]
+
+    def split_indices(label_value: int, mask: torch.Tensor) -> torch.Tensor:
+        return torch.where(mask & (labels == label_value))[0]
+
+    human_infl = _shuffle_indices(split_indices(1, human_mask), generator)
+    mouse_infl = _shuffle_indices(split_indices(1, mouse_mask), generator)
+    human_ctrl = _shuffle_indices(split_indices(0, human_mask), generator)
+    mouse_ctrl = _shuffle_indices(split_indices(0, mouse_mask), generator)
+
+    def make_pairs(h_array: torch.Tensor, m_array: torch.Tensor):
+        n_pairs = min(h_array.numel(), m_array.numel())
+        pairs = [[int(h_array[i].item()), int(m_array[i].item())] for i in range(n_pairs)]
+        h_remaining = h_array[n_pairs:]
+        m_remaining = m_array[n_pairs:]
+        return pairs, h_remaining, m_remaining
+
+    infl_pairs, human_infl_left, mouse_infl_left = make_pairs(human_infl, mouse_infl)
+    ctrl_pairs, human_ctrl_left, mouse_ctrl_left = make_pairs(human_ctrl, mouse_ctrl)
+
+    all_pairs = infl_pairs + ctrl_pairs
+    if all_pairs:
+        order = torch.randperm(len(all_pairs), generator=generator).tolist()
+        all_pairs = [all_pairs[i] for i in order]
+
+    batches: list[list[int]] = []
+    pairs_per_batch = batch_size // 2
+    for i in range(0, len(all_pairs), pairs_per_batch):
+        pair_chunk = all_pairs[i : i + pairs_per_batch]
+        if not pair_chunk:
+            continue
+        batch = [idx for pair in pair_chunk for idx in pair]
+        batches.append(batch)
+
+    remaining = torch.cat(
+        [
+            human_infl_left,
+            mouse_infl_left,
+            human_ctrl_left,
+            mouse_ctrl_left,
+        ]
+    )
+    if remaining.numel() > 0:
+        remaining = _shuffle_indices(remaining, generator)
+        for i in range(0, remaining.numel(), batch_size):
+            batch_tensor = remaining[i : i + batch_size]
+            if batch_tensor.numel() > 0:
+                batches.append(batch_tensor.tolist())
+
+    return batches
+
+
+def _iter_cross_species_batches(
+    X_tensor: torch.Tensor,
+    y_tensor: torch.Tensor,
+    species_tensor: torch.Tensor,
+    batch_indices: list[list[int]],
+    device: torch.device,
+):
+    for indices in batch_indices:
+        idx_tensor = torch.tensor(indices, dtype=torch.long)
+        yield (
+            X_tensor.index_select(0, idx_tensor).to(device),
+            y_tensor.index_select(0, idx_tensor).to(device),
+            species_tensor.index_select(0, idx_tensor).to(device),
+        )
+
+
 def _compute_cross_species_contrastive_loss(
     normalized_embeddings: torch.Tensor,
     labels: torch.Tensor,
@@ -246,7 +334,10 @@ def train_lora_model(
         )
 
     dataset = TensorDataset(X_tensor, y_tensor, species_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    if training_mode == "cross_contrastive":
+        dataloader = None
+    else:
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Load base model and apply LoRA
     logger.info("Loading base BulkFormer model...")
@@ -342,7 +433,27 @@ def train_lora_model(
         epoch_contrastive_losses = []
         model.train()
 
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{n_epochs}")
+        if training_mode == "cross_contrastive":
+            batch_indices = _build_cross_species_batch_indices(
+                labels=y_tensor,
+                species_ids=species_tensor,
+                batch_size=batch_size,
+                seed=random_seed + epoch,
+            )
+            iterable = _iter_cross_species_batches(
+                X_tensor=X_tensor,
+                y_tensor=y_tensor,
+                species_tensor=species_tensor,
+                batch_indices=batch_indices,
+                device=device_obj,
+            )
+            progress_bar = tqdm(
+                iterable,
+                total=len(batch_indices),
+                desc=f"Epoch {epoch + 1}/{n_epochs}",
+            )
+        else:
+            progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{n_epochs}")
         for batch_idx, (X_batch, y_batch, species_batch) in enumerate(progress_bar):
             X_batch = X_batch.to(device_obj)
             y_batch = y_batch.to(device_obj)
