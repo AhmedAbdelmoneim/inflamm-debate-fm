@@ -1,5 +1,6 @@
 """LoRA (Low-Rank Adaptation) implementation for BulkFormer fine-tuning."""
 
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,25 @@ except ImportError:
 from inflamm_debate_fm.bulkformer.embed import load_bulkformer_model
 
 
+@dataclass
+class _MinimalBulkFormerConfig:
+    """Lightweight config so PEFT can introspect model metadata.
+
+    PEFT expects HuggingFace-style models to expose attributes such as
+    ``config.hidden_size`` and ``config.torch_dtype`` when creating adapters.
+    BulkFormer does not ship with a config object, so we generate the minimal
+    fields PEFT queries.
+    """
+
+    hidden_size: int
+    model_type: str = "bulkformer"
+    is_encoder_decoder: bool = False
+    torch_dtype: torch.dtype = torch.float32
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class BulkFormerPEFTWrapper(nn.Module):
     """Wrapper to make BulkFormer compatible with PEFT's expected forward signature.
 
@@ -28,6 +48,30 @@ class BulkFormerPEFTWrapper(nn.Module):
     def __init__(self, base_model: nn.Module):
         super().__init__()
         self.base_model = base_model
+
+        # Propagate a config object so PEFT can access model metadata
+        base_config = getattr(base_model, "config", None)
+        if base_config is None:
+            # Try to infer hidden size from BulkFormer attributes
+            hidden_size = getattr(base_model, "dim", None)
+            if hidden_size is None:
+                hidden_size = getattr(base_model, "embedding_dim", None)
+
+            # Fall back to parameter dimension if needed
+            if hidden_size is None:
+                first_param = next(base_model.parameters(), None)
+                if first_param is not None and first_param.ndim > 0:
+                    hidden_size = first_param.shape[-1]
+
+            dtype = next(base_model.parameters(), None)
+            dtype = dtype.dtype if dtype is not None else torch.float32
+
+            base_config = _MinimalBulkFormerConfig(
+                hidden_size=int(hidden_size or 0),
+                torch_dtype=dtype,
+            )
+
+        self.config = base_config
 
     def forward(self, input_ids=None, inputs_embeds=None, repr_layers=None, **kwargs):
         """Forward pass that accepts both PEFT-style and BulkFormer-style arguments.
