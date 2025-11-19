@@ -1,5 +1,6 @@
 """Probing experiment commands."""
 
+from pathlib import Path
 import pickle
 
 from loguru import logger
@@ -8,56 +9,521 @@ import typer
 from inflamm_debate_fm.cli.utils import get_setup_transforms
 from inflamm_debate_fm.config import DATA_ROOT, get_config
 from inflamm_debate_fm.data.load import load_combined_adatas
+from inflamm_debate_fm.embeddings.multi_model import (
+    add_multi_model_embeddings_to_adata,
+    detect_available_models,
+)
 from inflamm_debate_fm.modeling.evaluation import evaluate_cross_species, evaluate_within_species
+from inflamm_debate_fm.utils.wandb_utils import init_wandb
 
 app = typer.Typer(help="Probing experiment commands")
 
 
-@app.command("within-species")
-def probe_within_species(species: str, n_cv_folds: int = 10) -> None:
-    """Run within-species probing experiments."""
+def _detect_embedding_keys(adata) -> list[str]:
+    """Detect available embedding keys in AnnData obsm.
+
+    Returns:
+        List of embedding keys (e.g., ['X_zero_shot', 'X_human', 'X_mouse']).
+    """
+    return [key for key in adata.obsm.keys() if key.startswith("X_")]
+
+
+def _load_and_prepare_data(
+    load_multi_model_embeddings: bool,
+    device: str,
+    batch_size: int,
+    embedding_types: str,
+) -> tuple[dict, list[str]]:
+    """Load and prepare AnnData objects with embeddings.
+
+    Returns:
+        Tuple of (combined_adatas dict, embedding_keys list).
+    """
     config = get_config()
     combined_data_dir = DATA_ROOT / config["paths"]["combined_data_dir"]
-    output_dir = DATA_ROOT / "within_species_results"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"Loading {species} combined data...")
-    combined_adatas = load_combined_adatas(combined_data_dir)
-    adata = combined_adatas[species]
-
-    setups = get_setup_transforms()
-    logger.info(f"Running within-species probing for {species}...")
-    all_results, all_roc_data = evaluate_within_species(
-        adata=adata, setups=setups, species_name=species.capitalize(), n_cv_folds=n_cv_folds
-    )
-
-    results_path = output_dir / f"{species}_results.pkl"
-    with results_path.open("wb") as f:
-        pickle.dump({"results": all_results, "roc_data": all_roc_data}, f)
-    logger.success(f"Saved results to {results_path}")
-
-
-@app.command("cross-species")
-def probe_cross_species(n_cv_folds: int = 10) -> None:
-    """Run cross-species probing experiments."""
-    config = get_config()
-    combined_data_dir = DATA_ROOT / config["paths"]["combined_data_dir"]
-    output_dir = DATA_ROOT / "cross_species_results"
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading combined data...")
     combined_adatas = load_combined_adatas(combined_data_dir)
 
-    setups = get_setup_transforms()
-    logger.info("Running cross-species probing...")
-    all_results, all_roc_data = evaluate_cross_species(
-        human_adata=combined_adatas["human"],
-        mouse_adata=combined_adatas["mouse"],
-        setups=setups,
-        n_cv_folds=n_cv_folds,
+    # Load multi-model embeddings if requested and not present
+    if load_multi_model_embeddings:
+        available_models = detect_available_models()
+        if available_models:
+            logger.info(f"Loading multi-model embeddings from {len(available_models)} models...")
+            for species in combined_adatas:
+                combined_adatas[species] = add_multi_model_embeddings_to_adata(
+                    combined_adatas[species],
+                    device=device,
+                    batch_size=batch_size,
+                    models=available_models,
+                )
+        else:
+            logger.warning("No models found for multi-model embedding extraction")
+
+    # Detect embedding keys (use intersection of all species)
+    all_keys = []
+    for adata in combined_adatas.values():
+        all_keys.append(set(_detect_embedding_keys(adata)))
+
+    if all_keys:
+        embedding_keys = list(set.intersection(*all_keys))
+    else:
+        embedding_keys = []
+
+    logger.info(f"Found common embedding keys: {embedding_keys}")
+
+    # Filter embedding types if specified
+    if embedding_types != "all":
+        requested_keys = [k.strip() for k in embedding_types.split(",")]
+        requested_keys = [k if k.startswith("X_") else f"X_{k}" for k in requested_keys]
+        embedding_keys = [k for k in embedding_keys if k in requested_keys]
+        logger.info(f"Using embedding keys: {embedding_keys}")
+
+    return combined_adatas, embedding_keys
+
+
+@app.command()
+def probe(
+    n_cv_folds: int = 10,
+    n_bootstraps: int = 20,
+    embedding_types: str = "all",
+    load_multi_model_embeddings: bool = True,
+    device: str = "cpu",
+    batch_size: int = 4,
+    save_weights: bool = True,
+    output_dir: str | None = None,
+    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
+) -> None:
+    """Run both within-species and cross-species probing experiments.
+
+    Args:
+        n_cv_folds: Number of CV folds for within-species experiments.
+        n_bootstraps: Number of bootstrap iterations for cross-species experiments.
+        embedding_types: Comma-separated list of embedding types to use, or 'all' for all available.
+        load_multi_model_embeddings: Whether to load multi-model embeddings if not present.
+        device: Device for loading embeddings ('cpu' or 'cuda').
+        batch_size: Batch size for embedding generation.
+        save_weights: Whether to save model weights for interpretability.
+        output_dir: Output directory. If None, uses default from config.
+    """
+    config = get_config()
+    if output_dir is None:
+        base_output_dir = DATA_ROOT / "probing_results"
+    else:
+        base_output_dir = Path(output_dir)
+
+    # Initialize wandb if requested
+    wandb_run = None
+    if use_wandb:
+        try:
+            wandb_run = init_wandb(
+                project=config.get("wandb", {}).get("project", "inflamm-debate-fm"),
+                tags=config.get("wandb", {}).get("tags", []) + ["probing"],
+                config={
+                    "n_cv_folds": n_cv_folds,
+                    "n_bootstraps": n_bootstraps,
+                    "embedding_types": embedding_types,
+                    "save_weights": save_weights,
+                },
+            )
+            if wandb_run:
+                wandb_run.name = "probing_all_experiments"
+        except Exception as e:
+            logger.warning(f"Failed to initialize wandb: {e}")
+            use_wandb = False
+
+    # Load and prepare data once
+    combined_adatas, embedding_keys = _load_and_prepare_data(
+        load_multi_model_embeddings=load_multi_model_embeddings,
+        device=device,
+        batch_size=batch_size,
+        embedding_types=embedding_types,
     )
 
+    setups = get_setup_transforms()
+
+    # Run within-species experiments for both species
+    logger.info("=" * 80)
+    logger.info("Running within-species probing experiments")
+    logger.info("=" * 80)
+
+    for species in ["human", "mouse"]:
+        logger.info(f"\n{'=' * 80}")
+        logger.info(f"Within-species: {species.capitalize()}")
+        logger.info(f"{'=' * 80}")
+
+        species_output_dir = base_output_dir / "within_species"
+        species_output_dir.mkdir(parents=True, exist_ok=True)
+
+        weights_dir = species_output_dir / "model_weights"
+        if save_weights:
+            weights_dir.mkdir(parents=True, exist_ok=True)
+
+        adata = combined_adatas[species.lower()]
+
+        # Get species-specific embedding keys
+        species_embedding_keys = _detect_embedding_keys(adata)
+        if embedding_types != "all":
+            requested_keys = [k.strip() for k in embedding_types.split(",")]
+            requested_keys = [k if k.startswith("X_") else f"X_{k}" for k in requested_keys]
+            species_embedding_keys = [k for k in species_embedding_keys if k in requested_keys]
+
+        all_results, all_roc_data, all_weights = evaluate_within_species(
+            adata=adata,
+            setups=setups,
+            species_name=species.capitalize(),
+            n_cv_folds=n_cv_folds,
+            embedding_keys=species_embedding_keys,
+            save_weights=save_weights,
+            weights_output_dir=weights_dir if save_weights else None,
+            use_wandb=use_wandb,
+            wandb_run=wandb_run,
+        )
+
+        # Save results
+        results_path = species_output_dir / f"{species}_results.pkl"
+        with results_path.open("wb") as f:
+            pickle.dump(
+                {
+                    "results": all_results,
+                    "roc_data": all_roc_data,
+                    "weights": all_weights,
+                    "embedding_keys": species_embedding_keys,
+                    "species": species,
+                    "n_cv_folds": n_cv_folds,
+                },
+                f,
+            )
+        logger.success(f"Saved results to {results_path}")
+
+        # Save summary CSV
+        summary_path = species_output_dir / f"{species}_summary.csv"
+        _save_summary_csv(all_results, summary_path)
+        logger.success(f"Saved summary to {summary_path}")
+
+    # Run cross-species experiments
+    logger.info("\n" + "=" * 80)
+    logger.info("Running cross-species probing experiments")
+    logger.info("=" * 80)
+
+    cross_species_output_dir = base_output_dir / "cross_species"
+    cross_species_output_dir.mkdir(parents=True, exist_ok=True)
+
+    weights_dir = cross_species_output_dir / "model_weights"
+    if save_weights:
+        weights_dir.mkdir(parents=True, exist_ok=True)
+
+    human_adata = combined_adatas["human"]
+    mouse_adata = combined_adatas["mouse"]
+
+    all_results, all_roc_data, all_weights = evaluate_cross_species(
+        human_adata=human_adata,
+        mouse_adata=mouse_adata,
+        setups=setups,
+        n_bootstraps=n_bootstraps,
+        embedding_keys=embedding_keys,
+        save_weights=save_weights,
+        weights_output_dir=weights_dir if save_weights else None,
+        use_wandb=use_wandb,
+        wandb_run=wandb_run,
+    )
+
+    # Save results
+    results_path = cross_species_output_dir / "cross_species_results.pkl"
+    with results_path.open("wb") as f:
+        pickle.dump(
+            {
+                "results": all_results,
+                "roc_data": all_roc_data,
+                "weights": all_weights,
+                "embedding_keys": embedding_keys,
+                "n_bootstraps": n_bootstraps,
+            },
+            f,
+        )
+    logger.success(f"Saved results to {results_path}")
+
+    # Save summary CSV
+    summary_path = cross_species_output_dir / "cross_species_summary.csv"
+    _save_summary_csv(all_results, summary_path)
+    logger.success(f"Saved summary to {summary_path}")
+
+    logger.info("\n" + "=" * 80)
+    logger.success("All probing experiments completed!")
+    logger.info("=" * 80)
+
+    if use_wandb and wandb_run:
+        wandb_run.finish()
+        logger.info("Wandb run completed")
+
+    if use_wandb and wandb_run:
+        wandb_run.finish()
+        logger.info("Wandb run completed")
+
+
+@app.command("within-species")
+def probe_within_species(
+    species: str,
+    n_cv_folds: int = 10,
+    embedding_types: str = "all",
+    load_multi_model_embeddings: bool = True,
+    device: str = "cpu",
+    batch_size: int = 4,
+    save_weights: bool = True,
+    output_dir: str | None = None,
+    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
+) -> None:
+    """Run within-species probing experiments.
+
+    Args:
+        species: Species name ('human' or 'mouse').
+        n_cv_folds: Number of CV folds.
+        embedding_types: Comma-separated list of embedding types to use, or 'all' for all available.
+        load_multi_model_embeddings: Whether to load multi-model embeddings if not present.
+        device: Device for loading embeddings ('cpu' or 'cuda').
+        batch_size: Batch size for embedding generation.
+        save_weights: Whether to save model weights for interpretability.
+        output_dir: Output directory. If None, uses default from config.
+    """
+    config = get_config()
+    if output_dir is None:
+        output_dir = DATA_ROOT / "probing_results" / "within_species"
+    else:
+        output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    weights_dir = output_dir / "model_weights"
+    if save_weights:
+        weights_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize wandb if requested
+    wandb_run = None
+    if use_wandb:
+        try:
+            wandb_run = init_wandb(
+                project=config.get("wandb", {}).get("project", "inflamm-debate-fm"),
+                tags=config.get("wandb", {}).get("tags", [])
+                + ["probing", "within-species", species],
+                config={
+                    "n_cv_folds": n_cv_folds,
+                    "embedding_types": embedding_types,
+                    "save_weights": save_weights,
+                    "species": species,
+                },
+            )
+            if wandb_run:
+                wandb_run.name = f"probing_within_species_{species}"
+        except Exception as e:
+            logger.warning(f"Failed to initialize wandb: {e}")
+            use_wandb = False
+
+    logger.info(f"Loading {species} combined data...")
+    combined_adatas, embedding_keys = _load_and_prepare_data(
+        load_multi_model_embeddings=load_multi_model_embeddings,
+        device=device,
+        batch_size=batch_size,
+        embedding_types=embedding_types,
+    )
+    adata = combined_adatas[species.lower()]
+
+    # Get species-specific embedding keys
+    species_embedding_keys = _detect_embedding_keys(adata)
+    if embedding_types != "all":
+        requested_keys = [k.strip() for k in embedding_types.split(",")]
+        requested_keys = [k if k.startswith("X_") else f"X_{k}" for k in requested_keys]
+        species_embedding_keys = [k for k in species_embedding_keys if k in requested_keys]
+    else:
+        species_embedding_keys = embedding_keys
+
+    setups = get_setup_transforms()
+    logger.info(f"Running within-species probing for {species} with {len(setups)} setups...")
+
+    all_results, all_roc_data, all_weights = evaluate_within_species(
+        adata=adata,
+        setups=setups,
+        species_name=species.capitalize(),
+        n_cv_folds=n_cv_folds,
+        embedding_keys=species_embedding_keys,
+        save_weights=save_weights,
+        weights_output_dir=weights_dir if save_weights else None,
+        use_wandb=use_wandb,
+        wandb_run=wandb_run,
+    )
+
+    # Save results
+    results_path = output_dir / f"{species}_results.pkl"
+    with results_path.open("wb") as f:
+        pickle.dump(
+            {
+                "results": all_results,
+                "roc_data": all_roc_data,
+                "weights": all_weights,
+                "embedding_keys": species_embedding_keys,
+                "species": species,
+                "n_cv_folds": n_cv_folds,
+            },
+            f,
+        )
+    logger.success(f"Saved results to {results_path}")
+
+    # Save summary CSV
+    summary_path = output_dir / f"{species}_summary.csv"
+    _save_summary_csv(all_results, summary_path)
+    logger.success(f"Saved summary to {summary_path}")
+
+    if use_wandb and wandb_run:
+        wandb_run.finish()
+        logger.info("Wandb run completed")
+
+
+@app.command("cross-species")
+def probe_cross_species(
+    n_bootstraps: int = 20,
+    embedding_types: str = "all",
+    load_multi_model_embeddings: bool = True,
+    device: str = "cpu",
+    batch_size: int = 4,
+    save_weights: bool = True,
+    output_dir: str | None = None,
+    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
+) -> None:
+    """Run cross-species probing experiments with bootstrapping.
+
+    Args:
+        n_bootstraps: Number of bootstrap iterations.
+        embedding_types: Comma-separated list of embedding types to use, or 'all' for all available.
+        load_multi_model_embeddings: Whether to load multi-model embeddings if not present.
+        device: Device for loading embeddings ('cpu' or 'cuda').
+        batch_size: Batch size for embedding generation.
+        save_weights: Whether to save model weights for interpretability.
+        output_dir: Output directory. If None, uses default from config.
+    """
+    config = get_config()
+    if output_dir is None:
+        output_dir = DATA_ROOT / "probing_results" / "cross_species"
+    else:
+        output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    weights_dir = output_dir / "model_weights"
+    if save_weights:
+        weights_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize wandb if requested
+    wandb_run = None
+    if use_wandb:
+        try:
+            wandb_run = init_wandb(
+                project=config.get("wandb", {}).get("project", "inflamm-debate-fm"),
+                tags=config.get("wandb", {}).get("tags", []) + ["probing", "cross-species"],
+                config={
+                    "n_bootstraps": n_bootstraps,
+                    "embedding_types": embedding_types,
+                    "save_weights": save_weights,
+                },
+            )
+            if wandb_run:
+                wandb_run.name = "probing_cross_species"
+        except Exception as e:
+            logger.warning(f"Failed to initialize wandb: {e}")
+            use_wandb = False
+
+    logger.info("Loading combined data...")
+    combined_adatas, embedding_keys = _load_and_prepare_data(
+        load_multi_model_embeddings=load_multi_model_embeddings,
+        device=device,
+        batch_size=batch_size,
+        embedding_types=embedding_types,
+    )
+    human_adata = combined_adatas["human"]
+    mouse_adata = combined_adatas["mouse"]
+
+    setups = get_setup_transforms()
+    logger.info(
+        f"Running cross-species probing with {len(setups)} setups and {n_bootstraps} bootstraps..."
+    )
+
+    all_results, all_roc_data, all_weights = evaluate_cross_species(
+        human_adata=human_adata,
+        mouse_adata=mouse_adata,
+        setups=setups,
+        n_bootstraps=n_bootstraps,
+        embedding_keys=embedding_keys,
+        save_weights=save_weights,
+        weights_output_dir=weights_dir if save_weights else None,
+        use_wandb=use_wandb,
+        wandb_run=wandb_run,
+    )
+
+    # Save results
     results_path = output_dir / "cross_species_results.pkl"
     with results_path.open("wb") as f:
-        pickle.dump({"results": all_results, "roc_data": all_roc_data}, f)
+        pickle.dump(
+            {
+                "results": all_results,
+                "roc_data": all_roc_data,
+                "weights": all_weights,
+                "embedding_keys": embedding_keys,
+                "n_bootstraps": n_bootstraps,
+            },
+            f,
+        )
     logger.success(f"Saved results to {results_path}")
+
+    # Save summary CSV
+    summary_path = output_dir / "cross_species_summary.csv"
+    _save_summary_csv(all_results, summary_path)
+    logger.success(f"Saved summary to {summary_path}")
+
+    if use_wandb and wandb_run:
+        wandb_run.finish()
+        logger.info("Wandb run completed")
+
+
+def _save_summary_csv(results: dict, output_path: Path) -> None:
+    """Save results summary as CSV."""
+    import pandas as pd
+
+    rows = []
+    for key, value in results.items():
+        if isinstance(value, dict) and "mean" in value:
+            # Cross-species bootstrap results
+            rows.append(
+                {
+                    "setup": key,
+                    "auroc_mean": value["mean"],
+                    "auroc_std": value["std"],
+                }
+            )
+        elif isinstance(value, tuple) and len(value) == 2:
+            # Within-species CV/LODO results
+            rows.append(
+                {
+                    "setup": key,
+                    "auroc_mean": value[0],
+                    "auroc_std": value[1],
+                }
+            )
+        else:
+            # Nested structure (CrossValidation/LODO)
+            for val_type, model_results in value.items():
+                if isinstance(model_results, dict):
+                    for model_type, data_results in model_results.items():
+                        if isinstance(data_results, dict):
+                            for data_key, data_value in data_results.items():
+                                if isinstance(data_value, tuple) and len(data_value) == 2:
+                                    rows.append(
+                                        {
+                                            "validation_type": val_type,
+                                            "model_type": model_type,
+                                            "setup": data_key,
+                                            "auroc_mean": data_value[0],
+                                            "auroc_std": data_value[1],
+                                        }
+                                    )
+
+    if rows:
+        df = pd.DataFrame(rows)
+        df.to_csv(output_path, index=False)
+    else:
+        logger.warning(f"No results to save to {output_path}")
