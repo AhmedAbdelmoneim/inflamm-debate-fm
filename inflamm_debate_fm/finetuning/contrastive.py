@@ -71,17 +71,20 @@ def compute_cross_species_contrastive_loss(
     mouse_inbatch = normalized_embeddings[mouse_inbatch_idx]  # [M, D]
 
     # Build negative pools by concatenating bank tensors if available
+    # CRITICAL: Detach in-batch candidates to prevent gradients from flowing to them
+    # This prevents instability where both query and positive are updated simultaneously
+    # Only the query embeddings should receive gradients in this direction
     if human_bank and len(human_bank) > 0:
         human_bank_tensor = torch.stack(list(human_bank), dim=0).to(device)
-        human_all = torch.cat([human_inbatch, human_bank_tensor], dim=0)
+        human_all = torch.cat([human_inbatch.detach(), human_bank_tensor], dim=0)
     else:
-        human_all = human_inbatch
+        human_all = human_inbatch.detach()
 
     if mouse_bank and len(mouse_bank) > 0:
         mouse_bank_tensor = torch.stack(list(mouse_bank), dim=0).to(device)
-        mouse_all = torch.cat([mouse_inbatch, mouse_bank_tensor], dim=0)
+        mouse_all = torch.cat([mouse_inbatch.detach(), mouse_bank_tensor], dim=0)
     else:
-        mouse_all = mouse_inbatch
+        mouse_all = mouse_inbatch.detach()
 
     total_loss = 0.0
     component_count = 0
