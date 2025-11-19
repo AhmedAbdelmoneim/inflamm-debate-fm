@@ -215,6 +215,197 @@ def _compute_cross_species_contrastive_loss(
     return total_loss / component_count
 
 
+def _build_classification_head(embedding_dim: int, device: torch.device) -> nn.Module:
+    return nn.Sequential(
+        nn.Linear(embedding_dim, 128),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(128, 2),
+    ).to(device)
+
+
+def _train_classification_epoch(
+    *,
+    model: torch.nn.Module,
+    classification_head: nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    device: torch.device,
+    gb_repeat: int,
+    max_grad_norm: float,
+    use_wandb: bool,
+    wandb_run,
+    epoch: int,
+    n_epochs: int,
+    trainable_params: list[torch.nn.Parameter],
+) -> float:
+    epoch_losses: list[float] = []
+    classification_head.train()
+    model.train()
+
+    progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{n_epochs}")
+    for batch_idx, (X_batch, y_batch, _) in enumerate(progress_bar):
+        X_batch = X_batch.to(device)
+        y_batch = y_batch.to(device)
+
+        optimizer.zero_grad()
+        output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
+        gene_embeddings = hidden[gb_repeat - 1]
+        del output, hidden
+
+        sample_embeddings = gene_embeddings.mean(dim=1)
+        logits = classification_head(sample_embeddings)
+        loss = criterion(logits, y_batch)
+
+        if torch.isnan(loss) or torch.isinf(loss):
+            logger.error(
+                f"NaN/Inf loss detected at epoch {epoch + 1}, batch {batch_idx}. "
+                f"Loss value: {loss.item()}"
+            )
+            optimizer.zero_grad()
+            continue
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
+        optimizer.step()
+
+        loss_value = loss.item()
+        epoch_losses.append(loss_value)
+        progress_bar.set_postfix({"loss": loss_value})
+
+        del gene_embeddings, sample_embeddings, logits, loss
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        if use_wandb and wandb_run:
+            wandb_run.log(
+                {"batch_loss": loss_value, "classification_loss": loss_value, "epoch": epoch}
+            )
+
+    avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("inf")
+    return avg_loss
+
+
+def _train_contrastive_epoch(
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    X_tensor: torch.Tensor,
+    y_tensor: torch.Tensor,
+    species_tensor: torch.Tensor,
+    batch_size: int,
+    random_seed: int,
+    epoch: int,
+    n_epochs: int,
+    device: torch.device,
+    gb_repeat: int,
+    max_grad_norm: float,
+    human_bank: deque[torch.Tensor],
+    mouse_bank: deque[torch.Tensor],
+    use_wandb: bool,
+    wandb_run,
+    contrastive_weight: float,
+    contrastive_temperature: float,
+    trainable_params: list[torch.nn.Parameter],
+) -> tuple[float, float | None]:
+    epoch_losses: list[float] = []
+    epoch_contrastive_losses: list[float] = []
+    model.train()
+
+    batch_indices = _build_cross_species_batch_indices(
+        labels=y_tensor,
+        species_ids=species_tensor,
+        batch_size=batch_size,
+        seed=random_seed + epoch,
+    )
+    iterable = _iter_cross_species_batches(
+        X_tensor=X_tensor,
+        y_tensor=y_tensor,
+        species_tensor=species_tensor,
+        batch_indices=batch_indices,
+        device=device,
+    )
+    progress_bar = tqdm(iterable, total=len(batch_indices), desc=f"Epoch {epoch + 1}/{n_epochs}")
+
+    for batch_idx, (X_batch, y_batch, species_batch) in enumerate(progress_bar):
+        optimizer.zero_grad()
+        output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
+        gene_embeddings = hidden[gb_repeat - 1]
+        del output, hidden
+
+        sample_embeddings = gene_embeddings.mean(dim=1)
+        normalized_embeddings = F.normalize(sample_embeddings, p=2, dim=1)
+        contrastive_component = _compute_cross_species_contrastive_loss(
+            normalized_embeddings,
+            y_batch,
+            species_batch,
+            contrastive_temperature,
+            human_bank=human_bank,
+            mouse_bank=mouse_bank,
+        )
+
+        if contrastive_component is None:
+            logger.debug("Skipped batch (insufficient cross-species pairs for contrastive loss).")
+            optimizer.zero_grad()
+            with torch.no_grad():
+                for vec, species_id in zip(normalized_embeddings, species_batch):
+                    if species_id.item() == SPECIES_TO_ID["human"]:
+                        human_bank.append(vec.detach().cpu())
+                    elif species_id.item() == SPECIES_TO_ID["mouse"]:
+                        mouse_bank.append(vec.detach().cpu())
+            del gene_embeddings, sample_embeddings, normalized_embeddings
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+            continue
+
+        loss = contrastive_weight * contrastive_component
+        if torch.isnan(loss) or torch.isinf(loss):
+            logger.error(
+                f"NaN/Inf contrastive loss at epoch {epoch + 1}, batch {batch_idx}: {loss.item()}"
+            )
+            optimizer.zero_grad()
+            del gene_embeddings, sample_embeddings, normalized_embeddings
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+            continue
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
+        optimizer.step()
+
+        loss_value = loss.item()
+        contrastive_loss_value = contrastive_component.item()
+        epoch_losses.append(loss_value)
+        epoch_contrastive_losses.append(contrastive_loss_value)
+        progress_bar.set_postfix({"loss": loss_value, "contrastive": contrastive_loss_value})
+
+        with torch.no_grad():
+            for vec, species_id in zip(normalized_embeddings, species_batch):
+                if species_id.item() == SPECIES_TO_ID["human"]:
+                    human_bank.append(vec.detach().cpu())
+                elif species_id.item() == SPECIES_TO_ID["mouse"]:
+                    mouse_bank.append(vec.detach().cpu())
+
+        del gene_embeddings, sample_embeddings, normalized_embeddings, loss, contrastive_component
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        if use_wandb and wandb_run:
+            wandb_run.log(
+                {
+                    "batch_loss": loss_value,
+                    "contrastive_loss": contrastive_loss_value,
+                    "epoch": epoch,
+                }
+            )
+    avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("inf")
+    avg_contrastive = (
+        float(np.mean(epoch_contrastive_losses)) if epoch_contrastive_losses else None
+    )
+    return avg_loss, avg_contrastive
+
+
 def train_lora_model(
     species: str,
     n_inflammation: int = 32,
@@ -384,28 +575,26 @@ def train_lora_model(
         actual_base = unwrapped_model.base_model
     else:
         actual_base = unwrapped_model
-    embedding_dim = (
-        actual_base.dim if hasattr(actual_base, "dim") else 640
-    )  # BulkFormer embedding dimension (640)
     gb_repeat = actual_base.gb_repeat if hasattr(actual_base, "gb_repeat") else 3
-    classification_head = nn.Sequential(
-        nn.Linear(embedding_dim, 128),
-        nn.ReLU(),
-        nn.Dropout(0.1),
-        nn.Linear(128, 2),  # Binary classification: control vs inflammation
-    ).to(device_obj)
+
+    # Prepare trainable parameters and optional classification head
+    trainable_params = list(model.parameters())
+    classification_head: nn.Module | None = None
+    criterion: nn.Module | None = None
+    if training_mode == "classification":
+        embedding_dim = actual_base.dim if hasattr(actual_base, "dim") else 640
+        classification_head = _build_classification_head(embedding_dim, device_obj)
+        criterion = nn.CrossEntropyLoss()
+        trainable_params += list(classification_head.parameters())
 
     # Ensure model is on correct device (should already be there, but verify)
     # Only move if not already on device to avoid creating copies
     if next(model.parameters()).device != device_obj:
         model = model.to(device_obj)
     model.train()
-    classification_head.train()
 
-    # Setup optimizer and loss (optimize both model and classification head)
-    all_params = list(model.parameters()) + list(classification_head.parameters())
-    optimizer = torch.optim.AdamW(all_params, lr=learning_rate, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss()
+    # Setup optimizer
+    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
 
     # Gradient clipping to prevent gradient explosion (helps with NaN losses)
     max_grad_norm = 1.0
@@ -438,8 +627,11 @@ def train_lora_model(
             use_wandb = False
 
     # Setup memory banks for universal contrastive training
-    human_bank: deque[torch.Tensor] = deque(maxlen=MEMORY_BANK_SIZE)
-    mouse_bank: deque[torch.Tensor] = deque(maxlen=MEMORY_BANK_SIZE)
+    human_bank: deque[torch.Tensor] | None = None
+    mouse_bank: deque[torch.Tensor] | None = None
+    if training_mode == "cross_contrastive":
+        human_bank = deque(maxlen=MEMORY_BANK_SIZE)
+        mouse_bank = deque(maxlen=MEMORY_BANK_SIZE)
 
     # Training loop with early stopping
     logger.info(
@@ -450,151 +642,52 @@ def train_lora_model(
     best_epoch = 0
 
     for epoch in range(n_epochs):
-        epoch_losses = []
-        epoch_contrastive_losses = []
-        model.train()
-
         if training_mode == "cross_contrastive":
-            batch_indices = _build_cross_species_batch_indices(
-                labels=y_tensor,
-                species_ids=species_tensor,
-                batch_size=batch_size,
-                seed=random_seed + epoch,
-            )
-            iterable = _iter_cross_species_batches(
+            if human_bank is None or mouse_bank is None:
+                raise RuntimeError("Contrastive mode requires initialized memory banks.")
+            avg_loss, avg_contrastive_loss = _train_contrastive_epoch(
+                model=model,
+                optimizer=optimizer,
                 X_tensor=X_tensor,
                 y_tensor=y_tensor,
                 species_tensor=species_tensor,
-                batch_indices=batch_indices,
+                batch_size=batch_size,
+                random_seed=random_seed,
+                epoch=epoch,
+                n_epochs=n_epochs,
                 device=device_obj,
-            )
-            progress_bar = tqdm(
-                iterable,
-                total=len(batch_indices),
-                desc=f"Epoch {epoch + 1}/{n_epochs}",
+                gb_repeat=gb_repeat,
+                max_grad_norm=max_grad_norm,
+                human_bank=human_bank,
+                mouse_bank=mouse_bank,
+                use_wandb=use_wandb,
+                wandb_run=wandb_run,
+                contrastive_weight=contrastive_weight,
+                contrastive_temperature=contrastive_temperature,
+                trainable_params=trainable_params,
             )
         else:
-            progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{n_epochs}")
-        for batch_idx, (X_batch, y_batch, species_batch) in enumerate(progress_bar):
-            X_batch = X_batch.to(device_obj)
-            y_batch = y_batch.to(device_obj)
-            species_batch = species_batch.to(device_obj)
-
-            # Forward pass
-            optimizer.zero_grad()
-
-            # Get gene-level embeddings from BulkFormer
-            # Use repr_layers to get intermediate representations before the final head
-            # Get embeddings from the last GBFormer layer (before layernorm and head)
-            # Call through PEFT wrapper using inputs_embeds (PEFT-compatible parameter)
-            # Only request the layer we need to minimize memory usage
-            output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
-            # hidden[gb_repeat - 1] is [batch_size, n_genes, embedding_dim]
-            gene_embeddings = hidden[gb_repeat - 1]
-            # Clear output and hidden dict to free memory immediately
-            del output, hidden
-
-            # Aggregate gene embeddings to sample-level (mean pooling)
-            sample_embeddings = gene_embeddings.mean(dim=1)  # [batch_size, embedding_dim]
-
-            # Pass through classification head
-            logits = classification_head(sample_embeddings)  # [batch_size, 2]
-
-            # Calculate loss
-            ce_loss = criterion(logits, y_batch)
-            loss = ce_loss
-            ce_loss_value = ce_loss.item()
-
-            contrastive_component = None
-            contrastive_loss_value = None
-            normalized_embeddings = None
-            if training_mode == "cross_contrastive" and contrastive_weight > 0:
-                normalized_embeddings = F.normalize(sample_embeddings, p=2, dim=1)
-                contrastive_component = _compute_cross_species_contrastive_loss(
-                    normalized_embeddings,
-                    y_batch,
-                    species_batch,
-                    contrastive_temperature,
-                    human_bank=human_bank,
-                    mouse_bank=mouse_bank,
+            if dataloader is None or classification_head is None or criterion is None:
+                raise RuntimeError(
+                    "Classification mode requires dataloader and classification head."
                 )
-                if contrastive_component is not None:
-                    loss = loss + contrastive_weight * contrastive_component
-                    contrastive_loss_value = contrastive_component.item()
-                    epoch_contrastive_losses.append(contrastive_loss_value)
-                else:
-                    logger.debug(
-                        "Skipped contrastive update for this batch (insufficient cross-species inflammation pairs)."
-                    )
+            avg_loss = _train_classification_epoch(
+                model=model,
+                classification_head=classification_head,
+                dataloader=dataloader,
+                optimizer=optimizer,
+                criterion=criterion,
+                device=device_obj,
+                gb_repeat=gb_repeat,
+                max_grad_norm=max_grad_norm,
+                use_wandb=use_wandb,
+                wandb_run=wandb_run,
+                epoch=epoch,
+                n_epochs=n_epochs,
+                trainable_params=trainable_params,
+            )
+            avg_contrastive_loss = None
 
-            # Check for NaN/Inf in loss or logits before backward pass
-            if torch.isnan(loss) or torch.isinf(loss):
-                logger.error(
-                    f"NaN/Inf loss detected at epoch {epoch + 1}, batch {batch_idx}. "
-                    f"Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, "
-                    f"mean={logits.mean().item():.4f}, has_nan={torch.isnan(logits).any()}, "
-                    f"has_inf={torch.isinf(logits).any()}"
-                )
-                logger.error(
-                    f"Input stats: min={X_batch.min().item():.4f}, max={X_batch.max().item():.4f}, "
-                    f"mean={X_batch.mean().item():.4f}, has_nan={torch.isnan(X_batch).any()}, "
-                    f"has_inf={torch.isinf(X_batch).any()}"
-                )
-                # Skip this batch and continue
-                optimizer.zero_grad()
-                continue
-
-            # Backward pass
-            loss.backward()
-
-            # Gradient clipping to prevent explosion
-            torch.nn.utils.clip_grad_norm_(all_params, max_grad_norm)
-
-            optimizer.step()
-
-            # Store loss value before deleting tensor
-            loss_value = loss.item()
-            epoch_losses.append(loss_value)
-            postfix = {"loss": loss_value, "cls": ce_loss_value}
-            if contrastive_loss_value is not None:
-                postfix["contrastive"] = contrastive_loss_value
-            progress_bar.set_postfix(postfix)
-
-            # Update memory banks with detached embeddings (CPU storage)
-            if training_mode == "cross_contrastive" and normalized_embeddings is not None:
-                with torch.no_grad():
-                    for vec, species_id in zip(normalized_embeddings, species_batch):
-                        if species_id.item() == SPECIES_TO_ID["human"]:
-                            human_bank.append(vec.detach().cpu())
-                        elif species_id.item() == SPECIES_TO_ID["mouse"]:
-                            mouse_bank.append(vec.detach().cpu())
-
-            # Clear intermediate tensors to free memory
-            del gene_embeddings, sample_embeddings, logits, loss, ce_loss
-            if contrastive_component is not None:
-                del contrastive_component
-            if normalized_embeddings is not None:
-                del normalized_embeddings
-            del species_batch
-            # Clear cache more aggressively for memory-constrained scenarios
-            if device_obj.type == "cuda":
-                torch.cuda.empty_cache()
-
-            # Log to wandb
-            if use_wandb and wandb_run:
-                log_payload = {
-                    "batch_loss": loss_value,
-                    "classification_loss": ce_loss_value,
-                    "epoch": epoch,
-                }
-                if contrastive_loss_value is not None:
-                    log_payload["contrastive_loss"] = contrastive_loss_value
-                wandb_run.log(log_payload)
-
-        avg_loss = np.mean(epoch_losses)
-        avg_contrastive_loss = (
-            float(np.mean(epoch_contrastive_losses)) if epoch_contrastive_losses else None
-        )
         logger.info(f"Epoch {epoch + 1}/{n_epochs} - Average Loss: {avg_loss:.4f}")
         if avg_contrastive_loss is not None:
             logger.info(f"  Contrastive Loss (avg): {avg_contrastive_loss:.4f}")
@@ -623,11 +716,11 @@ def train_lora_model(
                     "contrastive_temperature": contrastive_temperature,
                 },
             )
-            # Also save classification head
-            torch.save(
-                classification_head.state_dict(),
-                checkpoint_dir / "classification_head.pt",
-            )
+            if classification_head is not None:
+                torch.save(
+                    classification_head.state_dict(),
+                    checkpoint_dir / "classification_head.pt",
+                )
         else:
             epochs_without_improvement += 1
             logger.info(
@@ -674,11 +767,11 @@ def train_lora_model(
             "contrastive_temperature": contrastive_temperature,
         },
     )
-    # Also save classification head
-    torch.save(
-        classification_head.state_dict(),
-        final_checkpoint_dir / "classification_head.pt",
-    )
+    if classification_head is not None:
+        torch.save(
+            classification_head.state_dict(),
+            final_checkpoint_dir / "classification_head.pt",
+        )
 
     logger.success(
         f"Training complete! Best loss: {best_loss:.4f} at epoch {best_epoch}. "
