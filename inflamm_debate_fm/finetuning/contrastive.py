@@ -6,7 +6,8 @@ import torch
 import torch.nn.functional as F
 
 SPECIES_TO_ID = {"human": 0, "mouse": 1}
-MEMORY_BANK_SIZE = 1024
+# Use a relatively small memory bank to avoid overly stale negatives in tiny-data regime
+MEMORY_BANK_SIZE = 256
 
 
 def get_species_tensor(adata, fallback_label: str) -> torch.Tensor:
@@ -89,7 +90,9 @@ def compute_cross_species_contrastive_loss(
     total_loss = 0.0
     component_count = 0
 
-    for target_label in (1, 0):  # 1 = inflammation, 0 = control
+    # Focus positives on inflammation-inflammation pairs across species.
+    # Control-control pairs are treated as negatives only to sharpen the inflammation signal.
+    for target_label in (1,):  # 1 = inflammation
         human_subset = torch.where(human_mask & (labels == target_label))[0]
         mouse_subset = torch.where(mouse_mask & (labels == target_label))[0]
 

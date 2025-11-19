@@ -99,8 +99,8 @@ def _has_valid_cross_species_pairs(
         species_batch: Species IDs (0=human, 1=mouse).
 
     Returns:
-        True if batch has both human and mouse samples and at least one label type
-        has samples from both species.
+        True if batch has both human and mouse samples and at least one inflammation
+        label has samples from both species.
     """
     human_mask = species_batch == SPECIES_TO_ID["human"]
     mouse_mask = species_batch == SPECIES_TO_ID["mouse"]
@@ -109,14 +109,10 @@ def _has_valid_cross_species_pairs(
     if human_mask.sum() == 0 or mouse_mask.sum() == 0:
         return False
 
-    # Check if at least one label type has samples from both species
-    for target_label in (1, 0):  # 1 = inflammation, 0 = control
-        human_with_label = (human_mask & (y_batch == target_label)).sum()
-        mouse_with_label = (mouse_mask & (y_batch == target_label)).sum()
-        if human_with_label > 0 and mouse_with_label > 0:
-            return True
-
-    return False
+    # Check for cross-species inflammation pairs only (label == 1)
+    human_inflamed = (human_mask & (y_batch == 1)).sum()
+    mouse_inflamed = (mouse_mask & (y_batch == 1)).sum()
+    return human_inflamed > 0 and mouse_inflamed > 0
 
 
 def train_contrastive_epoch(

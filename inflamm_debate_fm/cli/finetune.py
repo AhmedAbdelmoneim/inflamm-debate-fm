@@ -38,12 +38,12 @@ def train(
         7, "--early-stopping-patience", "-p", help="Early stopping patience (default: 7)"
     ),
     contrastive_weight: float = typer.Option(
-        1.0,
+        0.3,
         "--contrastive-weight",
         help="Weight for cross-species InfoNCE loss (used for 'universal' mode).",
     ),
     contrastive_temperature: float = typer.Option(
-        0.07,
+        0.15,
         "--contrastive-temperature",
         help="Temperature for InfoNCE contrastive loss (used for 'universal' mode).",
     ),
