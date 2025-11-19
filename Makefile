@@ -119,6 +119,23 @@ embed-all: requirements
 		fi; \
 	fi
 
+## Generate multi-model embeddings (zero-shot + fine-tuned) with mean-pooling
+.PHONY: embed-multi-model
+embed-multi-model: requirements
+	@echo "Usage: make embed-multi-model [DATASET=<dataset_name|all>] [DEVICE=<cpu|cuda>] [BATCH_SIZE=<4>]"
+	@echo "Note: Uses batch_size=4 by default for CUDA memory optimization"
+	@echo "      If DATASET is not specified or set to 'all', processes all datasets"
+	@# Set PyTorch CUDA allocator config to reduce fragmentation
+	@if [ "$(or $(DEVICE),cpu)" = "cuda" ]; then \
+		PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True $(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed multi-model $(or $(DATASET),all) \
+			--device cuda \
+			--batch-size $(or $(BATCH_SIZE),4); \
+	else \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli embed multi-model $(or $(DATASET),all) \
+			--device cpu \
+			--batch-size $(or $(BATCH_SIZE),4); \
+	fi
+
 ## Run within-species probing experiments
 .PHONY: probe-within
 probe-within: requirements
@@ -138,7 +155,7 @@ probe-cross: requirements
 ## Fine-tune model with LoRA
 .PHONY: finetune
 finetune: requirements
-	@echo "Usage: make finetune SPECIES=<human|mouse|combined> [EPOCHS=<10>] [BATCH_SIZE=<8>] [USE_WANDB=<true|false>]"
+	@echo "Usage: make finetune SPECIES=<human|mouse|combined|universal> [EPOCHS=<50>] [BATCH_SIZE=<8>] [N_INFLAMMATION=<32>] [N_CONTROL=<32>] [EARLY_STOPPING_PATIENCE=<7>] [USE_WANDB=<true|false>]"
 	@if [ -z "$(SPECIES)" ]; then \
 		echo "Error: SPECIES variable is required"; \
 		echo "Example: make finetune SPECIES=human USE_WANDB=true"; \
@@ -147,14 +164,24 @@ finetune: requirements
 	@if [ "$(USE_WANDB)" = "true" ]; then \
 		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli finetune train \
 			--species $(SPECIES) \
-			--epochs $(or $(EPOCHS),10) \
+			--epochs $(or $(EPOCHS),50) \
+			--early-stopping-patience $(or $(EARLY_STOPPING_PATIENCE),7) \
 			--batch-size $(or $(BATCH_SIZE),8) \
+			--n-inflammation $(or $(N_INFLAMMATION),32) \
+			--n-control $(or $(N_CONTROL),32) \
+			--contrastive-weight $(or $(CONTRASTIVE_WEIGHT),1.0) \
+			--contrastive-temperature $(or $(CONTRASTIVE_TEMPERATURE),0.07) \
 			--use-wandb; \
 	else \
 		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli finetune train \
 			--species $(SPECIES) \
-			--epochs $(or $(EPOCHS),10) \
-			--batch-size $(or $(BATCH_SIZE),8); \
+			--epochs $(or $(EPOCHS),50) \
+			--early-stopping-patience $(or $(EARLY_STOPPING_PATIENCE),7) \
+			--batch-size $(or $(BATCH_SIZE),8) \
+			--n-inflammation $(or $(N_INFLAMMATION),32) \
+			--n-control $(or $(N_CONTROL),32) \
+			--contrastive-weight $(or $(CONTRASTIVE_WEIGHT),1.0) \
+			--contrastive-temperature $(or $(CONTRASTIVE_TEMPERATURE),0.07); \
 	fi
 
 ## Analyze coefficients

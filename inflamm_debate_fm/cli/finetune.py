@@ -16,13 +16,15 @@ def train(
         ...,
         "--species",
         "-s",
-        help="Species to train on: 'human', 'mouse', or 'combined'",
+        help="Species to train on: 'human', 'mouse', 'combined', or 'universal'",
     ),
     n_inflammation: int = typer.Option(
         32, "--n-inflammation", "-ni", help="Number of inflammation samples"
     ),
     n_control: int = typer.Option(32, "--n-control", "-nc", help="Number of control samples"),
-    n_epochs: int = typer.Option(10, "--epochs", "-e", help="Number of training epochs"),
+    n_epochs: int = typer.Option(
+        50, "--epochs", "-e", help="Number of training epochs (default: 50)"
+    ),
     batch_size: int = typer.Option(8, "--batch-size", "-b", help="Batch size"),
     learning_rate: float = typer.Option(1e-4, "--lr", help="Learning rate"),
     weight_decay: float = typer.Option(0.01, "--weight-decay", help="Weight decay"),
@@ -32,6 +34,19 @@ def train(
     ),
     random_seed: int = typer.Option(42, "--seed", help="Random seed"),
     use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
+    early_stopping_patience: int = typer.Option(
+        7, "--early-stopping-patience", "-p", help="Early stopping patience (default: 7)"
+    ),
+    contrastive_weight: float = typer.Option(
+        0.3,
+        "--contrastive-weight",
+        help="Weight for cross-species InfoNCE loss (used for 'universal' mode).",
+    ),
+    contrastive_temperature: float = typer.Option(
+        0.15,
+        "--contrastive-temperature",
+        help="Temperature for InfoNCE contrastive loss (used for 'universal' mode).",
+    ),
 ):
     """Train a LoRA fine-tuned model for inflammation classification.
 
@@ -54,15 +69,16 @@ def train(
             --lr 5e-5 \\
             --use-wandb
     """
-    if species not in ["human", "mouse", "combined"]:
+    if species not in ["human", "mouse", "combined", "universal"]:
         raise typer.BadParameter(
-            f"species must be 'human', 'mouse', or 'combined', got '{species}'"
+            f"species must be 'human', 'mouse', 'combined', or 'universal'; got '{species}'"
         )
 
     logger.info(f"Starting LoRA fine-tuning for {species}")
     logger.info(
         f"Configuration: {n_inflammation} inflammation + {n_control} control samples, "
-        f"{n_epochs} epochs, batch_size={batch_size}, lr={learning_rate}"
+        f"{n_epochs} epochs, batch_size={batch_size}, lr={learning_rate}, "
+        f"early_stopping_patience={early_stopping_patience}"
     )
 
     try:
@@ -78,6 +94,9 @@ def train(
             output_dir=output_dir,
             random_seed=random_seed,
             use_wandb=use_wandb,
+            early_stopping_patience=early_stopping_patience,
+            contrastive_weight=contrastive_weight,
+            contrastive_temperature=contrastive_temperature,
         )
         logger.success(f"Fine-tuning complete! Checkpoints saved to {output_path}")
         typer.echo("\n✓ Fine-tuning complete!")

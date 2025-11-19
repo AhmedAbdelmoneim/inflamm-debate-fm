@@ -1,5 +1,6 @@
 """LoRA (Low-Rank Adaptation) implementation for BulkFormer fine-tuning."""
 
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,26 @@ except ImportError:
 from inflamm_debate_fm.bulkformer.embed import load_bulkformer_model
 
 
+@dataclass
+class _MinimalBulkFormerConfig:
+    """Lightweight config so PEFT can introspect model metadata.
+
+    PEFT expects HuggingFace-style models to expose attributes such as
+    ``config.hidden_size`` and ``config.torch_dtype`` when creating adapters.
+    BulkFormer does not ship with a config object, so we generate the minimal
+    fields PEFT queries.
+    """
+
+    hidden_size: int
+    model_type: str = "bulkformer"
+    is_encoder_decoder: bool = False
+    torch_dtype: torch.dtype = torch.float32
+    use_return_dict: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class BulkFormerPEFTWrapper(nn.Module):
     """Wrapper to make BulkFormer compatible with PEFT's expected forward signature.
 
@@ -28,6 +49,30 @@ class BulkFormerPEFTWrapper(nn.Module):
     def __init__(self, base_model: nn.Module):
         super().__init__()
         self.base_model = base_model
+
+        # Propagate a config object so PEFT can access model metadata
+        base_config = getattr(base_model, "config", None)
+        if base_config is None:
+            # Try to infer hidden size from BulkFormer attributes
+            hidden_size = getattr(base_model, "dim", None)
+            if hidden_size is None:
+                hidden_size = getattr(base_model, "embedding_dim", None)
+
+            # Fall back to parameter dimension if needed
+            if hidden_size is None:
+                first_param = next(base_model.parameters(), None)
+                if first_param is not None and first_param.ndim > 0:
+                    hidden_size = first_param.shape[-1]
+
+            dtype = next(base_model.parameters(), None)
+            dtype = dtype.dtype if dtype is not None else torch.float32
+
+            base_config = _MinimalBulkFormerConfig(
+                hidden_size=int(hidden_size or 0),
+                torch_dtype=dtype,
+            )
+
+        self.config = base_config
 
     def forward(self, input_ids=None, inputs_embeds=None, repr_layers=None, **kwargs):
         """Forward pass that accepts both PEFT-style and BulkFormer-style arguments.
@@ -58,21 +103,24 @@ class BulkFormerPEFTWrapper(nn.Module):
 
 def apply_lora_to_bulkformer(
     model: nn.Module | None = None,
-    r: int = 8,
-    lora_alpha: int = 16,
+    r: int = 4,
+    lora_alpha: int = 8,
     lora_dropout: float = 0.1,
     target_modules: list[str] | None = None,
     device: str = "cpu",
 ) -> nn.Module:
     """Apply LoRA to BulkFormer model.
 
+    Targets only the last (highest) gb_formers block's attention layers to preserve
+    pretrained representations while allowing task-specific adaptation.
+
     Args:
         model: Pre-loaded BulkFormer model. If None, will load it.
-        r: LoRA rank (lower = fewer parameters).
-        lora_alpha: LoRA alpha scaling parameter.
+        r: LoRA rank (default: 4, lower = fewer parameters, less overfitting risk).
+        lora_alpha: LoRA alpha scaling parameter (default: 8, typically 2*r).
         lora_dropout: LoRA dropout rate.
         target_modules: List of module names to apply LoRA to.
-                       If None, applies to linear layers in GBFormer blocks.
+                       If None, automatically targets last block attention layers only.
         device: Device to load model on.
 
     Returns:
@@ -91,50 +139,77 @@ def apply_lora_to_bulkformer(
     if not isinstance(model, BulkFormerPEFTWrapper):
         model = BulkFormerPEFTWrapper(model)
 
-    # Default target modules: linear layers in GBFormer blocks and projection layers
-    # PEFT requires exact module names or simple patterns
+    # Default target modules: only attention layers in the LAST gb_formers block
+    # This preserves pretrained embeddings and early layers while allowing
+    # task-specific adaptation in the final representation layer
     if target_modules is None:
-        # Dynamically find all Linear layers in the original model (before wrapper)
         import re
 
-        linear_modules = []
+        # Find all gb_formers blocks to identify the last one
+        gb_formers_blocks = []
+        for name, module in original_model.named_modules():
+            # Match pattern: gb_formers.{block_idx}.f.{f_idx}.net.layers...
+            match = re.match(r"gb_formers\.(\d+)\.", name)
+            if match:
+                block_idx = int(match.group(1))
+                if block_idx not in gb_formers_blocks:
+                    gb_formers_blocks.append(block_idx)
+
+        if len(gb_formers_blocks) == 0:
+            raise ValueError(
+                "Could not find any gb_formers blocks in the model. "
+                "Please check the model architecture."
+            )
+
+        # Get the last (highest index) block
+        last_block_idx = max(gb_formers_blocks)
+        logger.info(
+            f"Found {len(gb_formers_blocks)} gb_formers blocks. "
+            f"Targeting last block (index {last_block_idx}) for LoRA adaptation."
+        )
+
+        # Find attention layers (to_q, to_v, to_out) in the last block only
+        # Exclude to_k as it's less critical for task adaptation
+        target_modules = []
         for name, module in original_model.named_modules():
             if isinstance(module, torch.nn.Linear):
-                linear_modules.append(name)
-
-        # Filter to key modules: projections and transformer attention/FFN layers
-        # Exclude the final head layer (we'll train that separately)
-        target_modules = [
-            name
-            for name in linear_modules
-            if (
-                name.startswith("gene_emb_proj.")
-                or name.startswith("x_proj.")
-                or name.startswith("ae_enc.")
-                or re.match(
-                    r"gb_formers\.\d+\.f\.\d+\.net\.layers\.\d+\.\d+\.fn\.(to_q|to_k|to_v|to_out)",
-                    name,
-                )
-                or re.match(
-                    r"gb_formers\.\d+\.f\.\d+\.net\.layers\.\d+\.\d+\.fn\.fn\.(w1|w2)", name
-                )
-            )
-            and not name.startswith("head.")  # Exclude final head
-        ]
+                # Match last block attention layers: gb_formers.{last_block_idx}.f.*.net.layers.*.*.fn.(to_q|to_v|to_out)
+                pattern = rf"gb_formers\.{last_block_idx}\.f\.\d+\.net\.layers\.\d+\.\d+\.fn\.(to_q|to_v|to_out)"
+                if re.match(pattern, name):
+                    target_modules.append(name)
+                    logger.debug(f"  Targeting: {name}")
 
         if len(target_modules) == 0:
-            # Fallback: use all Linear layers except head
-            target_modules = [name for name in linear_modules if not name.startswith("head.")]
+            # Fallback: try to find any attention layers in last block with broader pattern
+            logger.warning(
+                f"Could not find attention layers in last block {last_block_idx}. "
+                "Trying broader pattern matching..."
+            )
+            for name, module in original_model.named_modules():
+                if isinstance(module, torch.nn.Linear):
+                    # Match last block with any attention pattern
+                    pattern = rf"gb_formers\.{last_block_idx}\.f\.\d+\.net\.layers\.\d+\.\d+\.fn\.(to_q|to_k|to_v|to_out)"
+                    if re.match(pattern, name):
+                        target_modules.append(name)
+                        logger.debug(f"  Targeting (fallback): {name}")
+
+        if len(target_modules) == 0:
+            raise ValueError(
+                f"Could not find any attention layers in the last gb_formers block (index {last_block_idx}). "
+                "Please check the model architecture or provide target_modules explicitly."
+            )
 
         # Adjust target_modules to account for BulkFormerPEFTWrapper prefix
         # When PEFT wraps our wrapper, modules are accessed as "base_model.module_name"
         target_modules = [f"base_model.{name}" for name in target_modules]
 
-        logger.info(f"Targeting {len(target_modules)} Linear layers for LoRA adaptation")
+        logger.info(
+            f"Targeting {len(target_modules)} attention layers in last block for LoRA adaptation"
+        )
 
-    # Create LoRA config
+    # Create LoRA config with SEQ_CLS task type for classification tasks
     lora_config = LoraConfig(
-        task_type=TaskType.FEATURE_EXTRACTION,  # We're doing feature extraction
+        task_type=TaskType.SEQ_CLS,  # Sequence classification (inflammation classification)
         r=r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
@@ -216,12 +291,41 @@ def load_lora_checkpoint(
     if base_model is None:
         base_model = load_bulkformer_model(device=device)
 
+    # Wrap base model to make it compatible with PEFT's expected forward signature
+    # This must be done before loading PEFT checkpoint
+    if not isinstance(base_model, BulkFormerPEFTWrapper):
+        # Check if base_model is already wrapped by PEFT (shouldn't happen, but be safe)
+        if hasattr(base_model, "base_model") and isinstance(
+            base_model.base_model, BulkFormerPEFTWrapper
+        ):
+            wrapped_base = base_model
+        else:
+            wrapped_base = BulkFormerPEFTWrapper(base_model)
+    else:
+        wrapped_base = base_model
+
     # Load LoRA weights
     if checkpoint_path.is_dir():
         # PEFT checkpoint directory
         from peft import PeftModel
 
-        model = PeftModel.from_pretrained(base_model, str(checkpoint_path))
+        model = PeftModel.from_pretrained(wrapped_base, str(checkpoint_path))
+
+        # Verify that the wrapper is preserved in the PEFT structure
+        # PEFT might access model.base_model.model, so we need to ensure that's wrapped
+        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+            if not isinstance(model.base_model.model, BulkFormerPEFTWrapper):
+                # PEFT unwrapped our wrapper, re-apply it
+                logger.warning(
+                    "PEFT unwrapped BulkFormerPEFTWrapper. Re-applying wrapper to ensure compatibility."
+                )
+                # Get the underlying BulkFormer model
+                underlying_model = model.base_model.model
+                # Re-wrap it
+                wrapped_underlying = BulkFormerPEFTWrapper(underlying_model)
+                # Replace it in the PEFT structure
+                model.base_model.model = wrapped_underlying
+
         logger.info(f"Loaded LoRA checkpoint from {checkpoint_path}")
     else:
         # State dict file
