@@ -376,21 +376,33 @@ def evaluate_within_species(
     if use_wandb and wandb_run:
         for val_type in ["CrossValidation", "LODO"]:
             for model_type in ["Linear", "Nonlinear"]:
-                for data_type in ["Raw", "Embedding"]:
-                    # Get all results for this combination
-                    results_subset = {}
-                    for key, value in all_results[val_type][model_type][data_type].items():
-                        if isinstance(value, tuple) and len(value) == 2 and not np.isnan(value[0]):
-                            results_subset[key] = value
+                # Group results by data type (Raw vs Embedding)
+                raw_results = {}
+                embedding_results = {}
 
-                    # Log AUROC comparison charts (summary only, not too frequent)
-                    if results_subset and len(results_subset) > 0:
-                        _log_auroc_comparison(
-                            results_subset,
-                            wandb_run,
-                            f"{species_name}/{val_type}/{model_type}/{data_type}",
-                            f"{val_type} AUROC: {species_name} ({model_type}, {data_type})",
-                        )
+                for key, value in all_results[val_type][model_type].items():
+                    if isinstance(value, tuple) and len(value) == 2 and not np.isnan(value[0]):
+                        # Extract data type from key (format: "setup_name::data_type")
+                        if "::Raw" in key:
+                            raw_results[key] = value
+                        else:
+                            embedding_results[key] = value
+
+                # Log AUROC comparison charts
+                if raw_results:
+                    _log_auroc_comparison(
+                        raw_results,
+                        wandb_run,
+                        f"{species_name}/{val_type}/{model_type}/Raw",
+                        f"{val_type} AUROC: {species_name} ({model_type}, Raw)",
+                    )
+                if embedding_results:
+                    _log_auroc_comparison(
+                        embedding_results,
+                        wandb_run,
+                        f"{species_name}/{val_type}/{model_type}/Embedding",
+                        f"{val_type} AUROC: {species_name} ({model_type}, Embedding)",
+                    )
 
     return all_results, all_roc_data, all_weights
 
@@ -484,11 +496,42 @@ def evaluate_cross_species(
             continue
 
         # Prepare all data types: Raw + all embeddings
+        # For raw data, align gene space between human and mouse
+        if human_X_raw is not None and mouse_X_raw is not None:
+            # Find common genes
+            common_genes = human_adata.var_names.intersection(mouse_adata.var_names)
+            if len(common_genes) == 0:
+                tqdm.write(
+                    "Warning: No common genes between human and mouse for raw data. Skipping raw data."
+                )
+                human_X_raw_aligned = None
+                mouse_X_raw_aligned = None
+                feature_names = None
+            else:
+                # Align to common genes
+                human_gene_idx = [
+                    i for i, g in enumerate(human_adata.var_names) if g in common_genes
+                ]
+                mouse_gene_idx = [
+                    i for i, g in enumerate(mouse_adata.var_names) if g in common_genes
+                ]
+                human_X_raw_aligned = human_X_raw[:, human_gene_idx]
+                mouse_X_raw_aligned = mouse_X_raw[:, mouse_gene_idx]
+                feature_names = common_genes
+                tqdm.write(
+                    f"  Aligned raw gene expression: {len(common_genes)} common genes "
+                    f"(human: {human_X_raw.shape[1]}, mouse: {mouse_X_raw.shape[1]})"
+                )
+        else:
+            human_X_raw_aligned = None
+            mouse_X_raw_aligned = None
+            feature_names = None
+
         data_sources = [
             (
                 "Raw",
-                (human_X_raw, mouse_X_raw),
-                human_adata.var_names if human_X_raw is not None else None,
+                (human_X_raw_aligned, mouse_X_raw_aligned),
+                feature_names,
             )
         ]
 
