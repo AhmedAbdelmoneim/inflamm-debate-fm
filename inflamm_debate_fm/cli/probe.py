@@ -19,6 +19,52 @@ from inflamm_debate_fm.utils.wandb_utils import init_wandb
 app = typer.Typer(help="Probing experiment commands")
 
 
+@app.callback(invoke_without_command=True)
+def probe_callback(
+    ctx: typer.Context,
+    n_cv_folds: int = typer.Option(
+        10, "--n-cv-folds", help="Number of CV folds for within-species"
+    ),
+    n_bootstraps: int = typer.Option(
+        20, "--n-bootstraps", help="Number of bootstrap iterations for cross-species"
+    ),
+    embedding_types: str = typer.Option(
+        "all", "--embedding-types", help="Comma-separated list of embedding types, or 'all'"
+    ),
+    load_multi_model_embeddings: bool = typer.Option(
+        True,
+        "--load-multi-model-embeddings/--no-load-multi-model-embeddings",
+        help="Load multi-model embeddings if not present",
+    ),
+    device: str = typer.Option(
+        "cpu", "--device", help="Device for loading embeddings ('cpu' or 'cuda')"
+    ),
+    batch_size: int = typer.Option(4, "--batch-size", help="Batch size for embedding generation"),
+    save_weights: bool = typer.Option(
+        True, "--save-weights/--no-save-weights", help="Save model weights for interpretability"
+    ),
+    output_dir: str | None = typer.Option(None, "--output-dir", help="Output directory"),
+    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
+) -> None:
+    """Run both within-species and cross-species probing experiments.
+
+    If no subcommand is specified, runs all experiments.
+    """
+    if ctx.invoked_subcommand is None:
+        # Run the main probe function
+        probe(
+            n_cv_folds=n_cv_folds,
+            n_bootstraps=n_bootstraps,
+            embedding_types=embedding_types,
+            load_multi_model_embeddings=load_multi_model_embeddings,
+            device=device,
+            batch_size=batch_size,
+            save_weights=save_weights,
+            output_dir=output_dir,
+            use_wandb=use_wandb,
+        )
+
+
 def _detect_embedding_keys(adata) -> list[str]:
     """Detect available embedding keys in AnnData obsm.
 
@@ -82,7 +128,6 @@ def _load_and_prepare_data(
     return combined_adatas, embedding_keys
 
 
-@app.command()
 def probe(
     n_cv_folds: int = 10,
     n_bootstraps: int = 20,
@@ -92,7 +137,7 @@ def probe(
     batch_size: int = 4,
     save_weights: bool = True,
     output_dir: str | None = None,
-    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
+    use_wandb: bool = False,
 ) -> None:
     """Run both within-species and cross-species probing experiments.
 
