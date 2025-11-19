@@ -88,6 +88,37 @@ def train_classification_epoch(
     return avg_loss
 
 
+def _has_valid_cross_species_pairs(
+    y_batch: torch.Tensor,
+    species_batch: torch.Tensor,
+) -> bool:
+    """Check if batch has valid cross-species pairs for contrastive loss.
+
+    Args:
+        y_batch: Binary labels (1=inflammation, 0=control).
+        species_batch: Species IDs (0=human, 1=mouse).
+
+    Returns:
+        True if batch has both human and mouse samples and at least one label type
+        has samples from both species.
+    """
+    human_mask = species_batch == SPECIES_TO_ID["human"]
+    mouse_mask = species_batch == SPECIES_TO_ID["mouse"]
+
+    # Need both species in batch
+    if human_mask.sum() == 0 or mouse_mask.sum() == 0:
+        return False
+
+    # Check if at least one label type has samples from both species
+    for target_label in (1, 0):  # 1 = inflammation, 0 = control
+        human_with_label = (human_mask & (y_batch == target_label)).sum()
+        mouse_with_label = (mouse_mask & (y_batch == target_label)).sum()
+        if human_with_label > 0 and mouse_with_label > 0:
+            return True
+
+    return False
+
+
 def train_contrastive_epoch(
     *,
     model: torch.nn.Module,
@@ -135,6 +166,12 @@ def train_contrastive_epoch(
     progress_bar = tqdm(iterable, total=len(batch_indices), desc=f"Epoch {epoch + 1}/{n_epochs}")
 
     for batch_idx, (X_batch, y_batch, species_batch) in enumerate(progress_bar):
+        # Check if batch has valid cross-species pairs BEFORE processing
+        # This saves memory by avoiding forward pass on invalid batches
+        if not _has_valid_cross_species_pairs(y_batch, species_batch):
+            logger.debug("Skipped batch (insufficient cross-species pairs for contrastive loss).")
+            continue
+
         optimizer.zero_grad()
         output, hidden = model(inputs_embeds=X_batch, repr_layers=[gb_repeat - 1])
         gene_embeddings = hidden[gb_repeat - 1]
