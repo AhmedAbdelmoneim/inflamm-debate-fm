@@ -1,5 +1,6 @@
 """Training functions for LoRA fine-tuning."""
 
+from collections import deque
 from pathlib import Path
 
 from loguru import logger
@@ -22,6 +23,7 @@ from inflamm_debate_fm.finetuning.lora import apply_lora_to_bulkformer, save_lor
 from inflamm_debate_fm.utils.wandb_utils import init_wandb
 
 SPECIES_TO_ID = {"human": 0, "mouse": 1}
+MEMORY_BANK_SIZE = 1024
 
 
 def _get_species_tensor(adata, fallback_label: str) -> torch.Tensor:
@@ -145,6 +147,8 @@ def _compute_cross_species_contrastive_loss(
     labels: torch.Tensor,
     species_ids: torch.Tensor,
     temperature: float,
+    human_bank: deque | None = None,
+    mouse_bank: deque | None = None,
 ) -> torch.Tensor | None:
     """Compute InfoNCE loss where positives are cross-species inflammation pairs."""
     device = normalized_embeddings.device
@@ -154,10 +158,23 @@ def _compute_cross_species_contrastive_loss(
     if human_mask.sum() == 0 or mouse_mask.sum() == 0:
         return None
 
+    device = normalized_embeddings.device
     human_all_idx = torch.where(human_mask)[0]
     mouse_all_idx = torch.where(mouse_mask)[0]
-    human_all = normalized_embeddings[human_all_idx]
-    mouse_all = normalized_embeddings[mouse_all_idx]
+    human_inbatch = normalized_embeddings[human_all_idx]
+    mouse_inbatch = normalized_embeddings[mouse_all_idx]
+
+    if human_bank and len(human_bank) > 0:
+        human_bank_tensor = torch.stack(list(human_bank), dim=0).to(device)
+        human_all = torch.cat([human_inbatch, human_bank_tensor], dim=0)
+    else:
+        human_all = human_inbatch
+
+    if mouse_bank and len(mouse_bank) > 0:
+        mouse_bank_tensor = torch.stack(list(mouse_bank), dim=0).to(device)
+        mouse_all = torch.cat([mouse_inbatch, mouse_bank_tensor], dim=0)
+    else:
+        mouse_all = mouse_inbatch
 
     total_loss = 0.0
     component_count = 0
@@ -420,6 +437,10 @@ def train_lora_model(
             logger.warning(f"Failed to initialize wandb: {e}")
             use_wandb = False
 
+    # Setup memory banks for universal contrastive training
+    human_bank: deque[torch.Tensor] = deque(maxlen=MEMORY_BANK_SIZE)
+    mouse_bank: deque[torch.Tensor] = deque(maxlen=MEMORY_BANK_SIZE)
+
     # Training loop with early stopping
     logger.info(
         f"Starting training for {n_epochs} epochs (early stopping patience: {early_stopping_patience})..."
@@ -494,6 +515,8 @@ def train_lora_model(
                     y_batch,
                     species_batch,
                     contrastive_temperature,
+                    human_bank=human_bank,
+                    mouse_bank=mouse_bank,
                 )
                 if contrastive_component is not None:
                     loss = loss + contrastive_weight * contrastive_component
@@ -536,6 +559,15 @@ def train_lora_model(
             if contrastive_loss_value is not None:
                 postfix["contrastive"] = contrastive_loss_value
             progress_bar.set_postfix(postfix)
+
+            # Update memory banks with detached embeddings (CPU storage)
+            if training_mode == "cross_contrastive" and normalized_embeddings is not None:
+                with torch.no_grad():
+                    for vec, species_id in zip(normalized_embeddings, species_batch):
+                        if species_id.item() == SPECIES_TO_ID["human"]:
+                            human_bank.append(vec.detach().cpu())
+                        elif species_id.item() == SPECIES_TO_ID["mouse"]:
+                            mouse_bank.append(vec.detach().cpu())
 
             # Clear intermediate tensors to free memory
             del gene_embeddings, sample_embeddings, logits, loss, ce_loss
