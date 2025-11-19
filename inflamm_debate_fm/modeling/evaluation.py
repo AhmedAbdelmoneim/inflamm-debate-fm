@@ -4,133 +4,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import anndata as ad
-import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.base import clone
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedKFold, cross_val_score
 from sklearn.utils import resample
 from tqdm import tqdm
-import wandb
 
 from inflamm_debate_fm.config import get_config
 from inflamm_debate_fm.modeling.pipelines import get_linear_pipelines, get_nonlinear_pipelines
-
-
-def _safe_wandb_log(wandb_run, data: dict, context: str = "") -> None:
-    """Safely log data to wandb, catching network/certificate errors.
-
-    Args:
-        wandb_run: Wandb run object (can be None).
-        data: Dictionary of data to log.
-        context: Optional context string for error messages.
-    """
-    if wandb_run is None:
-        return
-
-    try:
-        wandb_run.log(data)
-    except Exception as e:
-        context_str = f" ({context})" if context else ""
-        tqdm.write(f"Warning: Failed to log to wandb{context_str}: {e}")
-
-
-def _log_roc_curves(
-    roc_data: list[tuple],
-    wandb_run,
-    key: str,
-    title: str | None = None,
-) -> None:
-    """Log ROC curves to wandb.
-
-    Args:
-        roc_data: List of (fpr, tpr) tuples.
-        wandb_run: Wandb run object.
-        key: Key for logging.
-        title: Optional title for the plot.
-    """
-    if not roc_data or wandb_run is None:
-        return
-
-    try:
-        # Create figure
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        # Plot all ROC curves
-        for fpr, tpr in roc_data:
-            ax.plot(fpr, tpr, alpha=0.5, linewidth=1)
-
-        # Plot diagonal line
-        ax.plot([0, 1], [0, 1], "k--", linewidth=1, alpha=0.5, label="Random")
-
-        ax.set_xlabel("False Positive Rate")
-        ax.set_ylabel("True Positive Rate")
-        ax.set_title(title or f"ROC Curves: {key}")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        _safe_wandb_log(wandb_run, {f"{key}/roc_curves": wandb.Image(fig)}, context="ROC curves")
-        plt.close(fig)
-    except Exception as e:
-        tqdm.write(f"Warning: Failed to create/log ROC curves to wandb: {e}")
-        plt.close("all")  # Close any open figures
-
-
-def _log_auroc_comparison(
-    results_dict: dict,
-    wandb_run,
-    key: str,
-    title: str | None = None,
-) -> None:
-    """Log AUROC comparison chart to wandb.
-
-    Args:
-        results_dict: Dictionary with setup names as keys and (mean, std) tuples as values.
-        wandb_run: Wandb run object.
-        key: Key for logging.
-        title: Optional title for the plot.
-    """
-    if not results_dict or wandb_run is None:
-        return
-
-    try:
-        # Prepare data
-        setups = []
-        means = []
-        stds = []
-
-        for setup_key, value in results_dict.items():
-            if isinstance(value, tuple) and len(value) == 2:
-                if not np.isnan(value[0]):
-                    setups.append(setup_key.replace("::", " - "))
-                    means.append(value[0])
-                    stds.append(value[1])
-
-        if not setups:
-            return
-
-        # Create figure
-        fig, ax = plt.subplots(figsize=(12, max(6, len(setups) * 0.5)))
-
-        y_pos = np.arange(len(setups))
-        ax.barh(y_pos, means, xerr=stds, capsize=5, alpha=0.7)
-        ax.axvline(0.5, color="red", linestyle="--", linewidth=1, alpha=0.5, label="Random (0.5)")
-
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(setups)
-        ax.set_xlabel("AUROC")
-        ax.set_xlim(0, 1.05)
-        ax.set_title(title or f"AUROC Comparison: {key}")
-        ax.legend()
-        ax.grid(True, alpha=0.3, axis="x")
-
-        _safe_wandb_log(
-            wandb_run, {f"{key}/auroc_comparison": wandb.Image(fig)}, context="AUROC comparison"
-        )
-        plt.close(fig)
-    except Exception as e:
-        tqdm.write(f"Warning: Failed to create/log AUROC comparison to wandb: {e}")
-        plt.close("all")  # Close any open figures
 
 
 def _extract_model_weights(pipe, data_type: str, feature_names: np.ndarray | None = None):
@@ -173,8 +55,6 @@ def evaluate_within_species(
     embedding_keys: list[str] | None = None,
     save_weights: bool = True,
     weights_output_dir: Path | str | None = None,
-    use_wandb: bool = False,
-    wandb_run=None,
 ) -> tuple[dict, dict, dict]:
     """Evaluate model performance within a single species.
 
@@ -187,8 +67,6 @@ def evaluate_within_species(
         embedding_keys: List of embedding keys to use. If None, uses all available.
         save_weights: Whether to save model weights for interpretability.
         weights_output_dir: Directory to save model weights. If None, doesn't save.
-        use_wandb: Whether to log results to wandb.
-        wandb_run: Wandb run object for logging.
 
     Returns:
         Tuple of (all_results, all_roc_data, all_weights) dictionaries.
@@ -267,17 +145,6 @@ def evaluate_within_species(
                     std_score = np.std(cv_scores)
                     all_results["CrossValidation"][model_type][full_key] = (mean_score, std_score)
 
-                    # Log to wandb
-                    if use_wandb and wandb_run:
-                        _safe_wandb_log(
-                            wandb_run,
-                            {
-                                f"{species_name}/{setup_name}/{model_type}/{data_type}/cv_auroc_mean": mean_score,
-                                f"{species_name}/{setup_name}/{model_type}/{data_type}/cv_auroc_std": std_score,
-                            },
-                            context=f"CV {model_type} {data_type}",
-                        )
-
                     # Store ROC for all folds and weights
                     fold_roc_data = []
                     fold_weights = []
@@ -298,17 +165,6 @@ def evaluate_within_species(
                     all_roc_data["CrossValidation"][model_type][full_key] = fold_roc_data
                     if fold_weights:
                         all_weights["CrossValidation"][model_type][full_key] = fold_weights
-
-                    # Log ROC curves to wandb (only for final summary, not during parallel execution)
-                    if use_wandb and wandb_run and fold_roc_data:
-                        # Only log if we have reasonable number of curves (not too many)
-                        if len(fold_roc_data) <= 20:  # Limit to avoid too many images
-                            _log_roc_curves(
-                                fold_roc_data,
-                                wandb_run,
-                                f"{species_name}/{setup_name}/{model_type}/{data_type}/cv",
-                                f"CV ROC: {setup_name} ({model_type}, {data_type})",
-                            )
 
                 except Exception as e:
                     tqdm.write(f"  CV Error: {e}")
@@ -348,61 +204,10 @@ def evaluate_within_species(
                     all_roc_data["LODO"][model_type][full_key] = temp_roc_data_lodo
                     if temp_weights_lodo:
                         all_weights["LODO"][model_type][full_key] = temp_weights_lodo
-
-                    # Log to wandb
-                    if use_wandb and wandb_run:
-                        _safe_wandb_log(
-                            wandb_run,
-                            {
-                                f"{species_name}/{setup_name}/{model_type}/{data_type}/lodo_auroc_mean": mean_lodo,
-                                f"{species_name}/{setup_name}/{model_type}/{data_type}/lodo_auroc_std": std_lodo,
-                            },
-                            context=f"LODO {model_type} {data_type}",
-                        )
-                        # Log ROC curves (LODO typically has few curves, so safe to log)
-                        if temp_roc_data_lodo and len(temp_roc_data_lodo) <= 20:
-                            _log_roc_curves(
-                                temp_roc_data_lodo,
-                                wandb_run,
-                                f"{species_name}/{setup_name}/{model_type}/{data_type}/lodo",
-                                f"LODO ROC: {setup_name} ({model_type}, {data_type})",
-                            )
                 else:
                     all_results["LODO"][model_type][full_key] = (np.nan, np.nan)
                     all_roc_data["LODO"][model_type][full_key] = []
                     all_weights["LODO"][model_type][full_key] = []
-
-    # Log summary AUROC comparison charts
-    if use_wandb and wandb_run:
-        for val_type in ["CrossValidation", "LODO"]:
-            for model_type in ["Linear", "Nonlinear"]:
-                # Group results by data type (Raw vs Embedding)
-                raw_results = {}
-                embedding_results = {}
-
-                for key, value in all_results[val_type][model_type].items():
-                    if isinstance(value, tuple) and len(value) == 2 and not np.isnan(value[0]):
-                        # Extract data type from key (format: "setup_name::data_type")
-                        if "::Raw" in key:
-                            raw_results[key] = value
-                        else:
-                            embedding_results[key] = value
-
-                # Log AUROC comparison charts
-                if raw_results:
-                    _log_auroc_comparison(
-                        raw_results,
-                        wandb_run,
-                        f"{species_name}/{val_type}/{model_type}/Raw",
-                        f"{val_type} AUROC: {species_name} ({model_type}, Raw)",
-                    )
-                if embedding_results:
-                    _log_auroc_comparison(
-                        embedding_results,
-                        wandb_run,
-                        f"{species_name}/{val_type}/{model_type}/Embedding",
-                        f"{val_type} AUROC: {species_name} ({model_type}, Embedding)",
-                    )
 
     return all_results, all_roc_data, all_weights
 
@@ -417,8 +222,6 @@ def evaluate_cross_species(
     embedding_keys: list[str] | None = None,
     save_weights: bool = True,
     weights_output_dir: Path | str | None = None,
-    use_wandb: bool = False,
-    wandb_run=None,
 ) -> tuple[dict, dict, dict]:
     """Evaluate cross-species model performance with bootstrapping.
 
@@ -432,8 +235,6 @@ def evaluate_cross_species(
         embedding_keys: List of embedding keys to use. If None, uses all available.
         save_weights: Whether to save model weights for interpretability.
         weights_output_dir: Directory to save model weights. If None, doesn't save.
-        use_wandb: Whether to log results to wandb.
-        wandb_run: Wandb run object for logging.
 
     Returns:
         Tuple of (all_results, all_roc_data, all_weights) dictionaries.
@@ -598,25 +399,6 @@ def evaluate_cross_species(
                 if bootstrap_weights:
                     all_weights[key] = bootstrap_weights
 
-                # Log to wandb (skip ROC curves for parallel jobs to reduce upload load)
-                if use_wandb and wandb_run:
-                    _safe_wandb_log(
-                        wandb_run,
-                        {
-                            f"cross_species/{key}/auroc_mean": np.mean(bootstrap_aurocs),
-                            f"cross_species/{key}/auroc_std": np.std(bootstrap_aurocs),
-                        },
-                        context=f"Cross-species Human→Mouse {key}",
-                    )
-                    # Only log ROC curves if not a parallel job (to reduce upload load)
-                    if bootstrap_roc_data and bootstrap_start is None and bootstrap_end is None:
-                        _log_roc_curves(
-                            bootstrap_roc_data,
-                            wandb_run,
-                            f"cross_species/{key}",
-                            f"Cross-species ROC: {key}",
-                        )
-
             # Mouse -> Human with bootstrapping
             tqdm.write(
                 f"  Training on Mouse, testing on Human ({data_type}) with {actual_n_bootstraps} bootstraps ({bootstrap_start}-{bootstrap_end - 1})..."
@@ -662,42 +444,5 @@ def evaluate_cross_species(
                 all_roc_data[key] = bootstrap_roc_data
                 if bootstrap_weights:
                     all_weights[key] = bootstrap_weights
-
-                # Log to wandb (skip ROC curves for parallel jobs to reduce upload load)
-                if use_wandb and wandb_run:
-                    _safe_wandb_log(
-                        wandb_run,
-                        {
-                            f"cross_species/{key}/auroc_mean": np.mean(bootstrap_aurocs),
-                            f"cross_species/{key}/auroc_std": np.std(bootstrap_aurocs),
-                        },
-                        context=f"Cross-species Mouse→Human {key}",
-                    )
-                    # Only log ROC curves if not a parallel job (to reduce upload load)
-                    if bootstrap_roc_data and bootstrap_start is None and bootstrap_end is None:
-                        _log_roc_curves(
-                            bootstrap_roc_data,
-                            wandb_run,
-                            f"cross_species/{key}",
-                            f"Cross-species ROC: {key}",
-                        )
-
-    # Log summary AUROC comparison charts for cross-species
-    if use_wandb and wandb_run:
-        # Group by data type
-        for data_type in set(k.split("::")[-1] for k in all_results.keys() if "::" in k):
-            results_subset = {
-                k: v
-                for k, v in all_results.items()
-                if k.endswith(f"::{data_type}") and isinstance(v, dict) and "mean" in v
-            }
-            # Only log comparison charts if not a parallel job (to reduce upload load)
-            if results_subset and bootstrap_start is None and bootstrap_end is None:
-                _log_auroc_comparison(
-                    {k: (v["mean"], v["std"]) for k, v in results_subset.items()},
-                    wandb_run,
-                    f"cross_species/{data_type}",
-                    f"Cross-species AUROC: {data_type}",
-                )
 
     return all_results, all_roc_data, all_weights

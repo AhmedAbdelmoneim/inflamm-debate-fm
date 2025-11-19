@@ -6,12 +6,11 @@
 #   --n-bootstraps N      Total number of bootstraps (default: 100)
 #   --n-jobs N           Number of parallel jobs for cross-species (default: 10)
 #   --n-cv-folds N       Number of CV folds for within-species (default: 10)
-#   --use-wandb          Enable wandb logging
 #   --skip-within        Skip within-species experiments
 #   --skip-cross         Skip cross-species experiments
 #
 # Example:
-#   ./scripts/run_probing_parallel.sh --n-bootstraps 100 --n-jobs 10 --use-wandb
+#   ./scripts/run_probing_parallel.sh --n-bootstraps 100 --n-jobs 10
 
 set -e
 
@@ -19,7 +18,6 @@ set -e
 N_BOOTSTRAPS=100
 N_JOBS=10
 N_CV_FOLDS=10
-USE_WANDB=""
 SKIP_WITHIN=false
 SKIP_CROSS=false
 OTHER_ARGS=()
@@ -38,10 +36,6 @@ while [[ $# -gt 0 ]]; do
         --n-cv-folds)
             N_CV_FOLDS="$2"
             shift 2
-            ;;
-        --use-wandb)
-            USE_WANDB="--use-wandb"
-            shift
             ;;
         --skip-within)
             SKIP_WITHIN=true
@@ -64,7 +58,6 @@ echo "========================================="
 echo "Bootstrap iterations: $N_BOOTSTRAPS"
 echo "Parallel jobs: $N_JOBS"
 echo "CV folds: $N_CV_FOLDS"
-echo "Wandb: ${USE_WANDB:-disabled}"
 echo "========================================="
 echo ""
 
@@ -82,7 +75,6 @@ if [ "$SKIP_WITHIN" = false ]; then
         hpc/run_job.sh \
         probe within-species --species human \
         --n-cv-folds $N_CV_FOLDS \
-        $USE_WANDB \
         "${OTHER_ARGS[@]}")
     
     echo "  Submitted human job: $JOB_HUMAN"
@@ -97,7 +89,6 @@ if [ "$SKIP_WITHIN" = false ]; then
         hpc/run_job.sh \
         probe within-species --species mouse \
         --n-cv-folds $N_CV_FOLDS \
-        $USE_WANDB \
         "${OTHER_ARGS[@]}")
     
     echo "  Submitted mouse job: $JOB_MOUSE"
@@ -139,7 +130,6 @@ if [ "$SKIP_CROSS" = false ]; then
             --n-bootstraps $N_BOOTSTRAPS \
             --bootstrap-start $START \
             --bootstrap-end $END \
-            $USE_WANDB \
             "${OTHER_ARGS[@]}")
         
         CROSS_JOB_IDS+=($JOB_ID)

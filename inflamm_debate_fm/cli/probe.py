@@ -15,7 +15,6 @@ from inflamm_debate_fm.embeddings.multi_model import (
     detect_available_models,
 )
 from inflamm_debate_fm.modeling.evaluation import evaluate_cross_species, evaluate_within_species
-from inflamm_debate_fm.utils.wandb_utils import init_wandb
 
 app = typer.Typer(help="Probing experiment commands")
 
@@ -51,7 +50,6 @@ def probe_callback(
         True, "--save-weights/--no-save-weights", help="Save model weights for interpretability"
     ),
     output_dir: str | None = typer.Option(None, "--output-dir", help="Output directory"),
-    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
 ) -> None:
     """Run both within-species and cross-species probing experiments.
 
@@ -70,7 +68,6 @@ def probe_callback(
             batch_size=batch_size,
             save_weights=save_weights,
             output_dir=output_dir,
-            use_wandb=use_wandb,
         )
 
 
@@ -197,7 +194,6 @@ def probe(
     batch_size: int = 4,
     save_weights: bool = True,
     output_dir: str | None = None,
-    use_wandb: bool = False,
 ) -> None:
     """Run both within-species and cross-species probing experiments.
 
@@ -211,31 +207,10 @@ def probe(
         save_weights: Whether to save model weights for interpretability.
         output_dir: Output directory. If None, uses default from config.
     """
-    config = get_config()
     if output_dir is None:
         base_output_dir = DATA_ROOT / "probing_results"
     else:
         base_output_dir = Path(output_dir)
-
-    # Initialize wandb if requested
-    wandb_run = None
-    if use_wandb:
-        try:
-            wandb_run = init_wandb(
-                project=config.get("wandb", {}).get("project", "inflamm-debate-fm"),
-                tags=config.get("wandb", {}).get("tags", []) + ["probing"],
-                config={
-                    "n_cv_folds": n_cv_folds,
-                    "n_bootstraps": n_bootstraps,
-                    "embedding_types": embedding_types,
-                    "save_weights": save_weights,
-                },
-            )
-            if wandb_run:
-                wandb_run.name = "probing_all_experiments"
-        except Exception as e:
-            logger.warning(f"Failed to initialize wandb: {e}")
-            use_wandb = False
 
     # Load and prepare data once
     combined_adatas, embedding_keys = _load_and_prepare_data(
@@ -281,8 +256,6 @@ def probe(
             embedding_keys=species_embedding_keys,
             save_weights=save_weights,
             weights_output_dir=weights_dir if save_weights else None,
-            use_wandb=use_wandb,
-            wandb_run=wandb_run,
         )
 
         # Save results
@@ -331,8 +304,6 @@ def probe(
         embedding_keys=embedding_keys,
         save_weights=save_weights,
         weights_output_dir=weights_dir if save_weights else None,
-        use_wandb=use_wandb,
-        wandb_run=wandb_run,
     )
 
     # Save results with bootstrap range in filename if using parallelization
@@ -369,10 +340,6 @@ def probe(
     logger.success("All probing experiments completed!")
     logger.info("=" * 80)
 
-    if use_wandb and wandb_run:
-        wandb_run.finish()
-        logger.info("Wandb run completed")
-
 
 @app.command("within-species")
 def probe_within_species(
@@ -384,7 +351,6 @@ def probe_within_species(
     batch_size: int = 4,
     save_weights: bool = True,
     output_dir: str | None = None,
-    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
 ) -> None:
     """Run within-species probing experiments.
 
@@ -398,7 +364,6 @@ def probe_within_species(
         save_weights: Whether to save model weights for interpretability.
         output_dir: Output directory. If None, uses default from config.
     """
-    config = get_config()
     if output_dir is None:
         output_dir = DATA_ROOT / "probing_results" / "within_species"
     else:
@@ -408,27 +373,6 @@ def probe_within_species(
     weights_dir = output_dir / "model_weights"
     if save_weights:
         weights_dir.mkdir(parents=True, exist_ok=True)
-
-    # Initialize wandb if requested
-    wandb_run = None
-    if use_wandb:
-        try:
-            wandb_run = init_wandb(
-                project=config.get("wandb", {}).get("project", "inflamm-debate-fm"),
-                tags=config.get("wandb", {}).get("tags", [])
-                + ["probing", "within-species", species],
-                config={
-                    "n_cv_folds": n_cv_folds,
-                    "embedding_types": embedding_types,
-                    "save_weights": save_weights,
-                    "species": species,
-                },
-            )
-            if wandb_run:
-                wandb_run.name = f"probing_within_species_{species}"
-        except Exception as e:
-            logger.warning(f"Failed to initialize wandb: {e}")
-            use_wandb = False
 
     logger.info(f"Loading {species} combined data...")
     combined_adatas, embedding_keys = _load_and_prepare_data(
@@ -466,8 +410,6 @@ def probe_within_species(
         embedding_keys=species_embedding_keys,
         save_weights=save_weights,
         weights_output_dir=weights_dir if save_weights else None,
-        use_wandb=use_wandb,
-        wandb_run=wandb_run,
     )
 
     # Save results
@@ -491,10 +433,6 @@ def probe_within_species(
     _save_summary_csv(all_results, summary_path)
     logger.success(f"Saved summary to {summary_path}")
 
-    if use_wandb and wandb_run:
-        wandb_run.finish()
-        logger.info("Wandb run completed")
-
 
 @app.command("cross-species")
 def probe_cross_species(
@@ -511,7 +449,6 @@ def probe_cross_species(
     batch_size: int = 4,
     save_weights: bool = True,
     output_dir: str | None = None,
-    use_wandb: bool = typer.Option(False, "--use-wandb", help="Log to Weights & Biases"),
 ) -> None:
     """Run cross-species probing experiments with bootstrapping.
 
@@ -524,7 +461,6 @@ def probe_cross_species(
         save_weights: Whether to save model weights for interpretability.
         output_dir: Output directory. If None, uses default from config.
     """
-    config = get_config()
     if output_dir is None:
         output_dir = DATA_ROOT / "probing_results" / "cross_species"
     else:
@@ -534,25 +470,6 @@ def probe_cross_species(
     weights_dir = output_dir / "model_weights"
     if save_weights:
         weights_dir.mkdir(parents=True, exist_ok=True)
-
-    # Initialize wandb if requested
-    wandb_run = None
-    if use_wandb:
-        try:
-            wandb_run = init_wandb(
-                project=config.get("wandb", {}).get("project", "inflamm-debate-fm"),
-                tags=config.get("wandb", {}).get("tags", []) + ["probing", "cross-species"],
-                config={
-                    "n_bootstraps": n_bootstraps,
-                    "embedding_types": embedding_types,
-                    "save_weights": save_weights,
-                },
-            )
-            if wandb_run:
-                wandb_run.name = "probing_cross_species"
-        except Exception as e:
-            logger.warning(f"Failed to initialize wandb: {e}")
-            use_wandb = False
 
     logger.info("Loading combined data...")
     combined_adatas, embedding_keys = _load_and_prepare_data(
@@ -579,8 +496,6 @@ def probe_cross_species(
         embedding_keys=embedding_keys,
         save_weights=save_weights,
         weights_output_dir=weights_dir if save_weights else None,
-        use_wandb=use_wandb,
-        wandb_run=wandb_run,
     )
 
     # Save results with bootstrap range in filename if using parallelization
@@ -607,10 +522,6 @@ def probe_cross_species(
     summary_path = output_dir / "cross_species_summary.csv"
     _save_summary_csv(all_results, summary_path)
     logger.success(f"Saved summary to {summary_path}")
-
-    if use_wandb and wandb_run:
-        wandb_run.finish()
-        logger.info("Wandb run completed")
 
 
 def _save_summary_csv(results: dict, output_path: Path) -> None:
