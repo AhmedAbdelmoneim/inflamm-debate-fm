@@ -99,23 +99,48 @@ def compute_cross_species_contrastive_loss(
 
         # Randomly permute both sides together to maintain pairing
         # We permute indices 0..num_pairs-1 and apply the same permutation to both
+        # This ensures selected_h[i] pairs with selected_m[i] for all i
         pair_perm = torch.randperm(num_pairs, device=device)
-        selected_h = human_subset[pair_perm]
-        selected_m = mouse_subset[pair_perm]
+        selected_h = human_subset[pair_perm]  # Batch indices of selected human samples
+        selected_m = mouse_subset[pair_perm]  # Batch indices of selected mouse samples
 
         # Find positions of selected samples within their respective in-batch index arrays
         # These positions will be used as positive labels in the cross-entropy loss
+        # labels_for_h[i] = position of selected_m[i] in mouse_inbatch_idx
+        # This position corresponds to mouse_all[labels_for_h[i]], which is the positive for selected_h[i]
         labels_for_h = _match_positions(selected_m, mouse_inbatch_idx)
         labels_for_m = _match_positions(selected_h, human_inbatch_idx)
         if labels_for_h is None or labels_for_m is None:
             continue
 
-        # Compute logits: similarity between selected samples and all negatives (in-batch + bank)
+        # Sanity check: verify that labels_for_h[i] correctly indexes into mouse_all
+        # mouse_all = [mouse_inbatch, mouse_bank] where mouse_inbatch = normalized_embeddings[mouse_inbatch_idx]
+        # So mouse_all[labels_for_h[i]] should equal normalized_embeddings[selected_m[i]]
+        # This is verified by: mouse_inbatch_idx[labels_for_h[i]] == selected_m[i]
+        if not torch.all(mouse_inbatch_idx[labels_for_h] == selected_m):
+            # This should never happen if _match_positions works correctly
+            continue
+        if not torch.all(human_inbatch_idx[labels_for_m] == selected_h):
+            continue
+
+        # Compute logits: similarity between selected samples and all candidates (in-batch + bank)
+        # Shape: [num_pairs, len(mouse_inbatch) + len(mouse_bank)]
         logits_h = torch.matmul(normalized_embeddings[selected_h], mouse_all.T) / temperature
         logits_m = torch.matmul(normalized_embeddings[selected_m], human_all.T) / temperature
 
+        # Verify label indices are within valid range
+        num_mouse_inbatch = len(mouse_inbatch_idx)
+        num_human_inbatch = len(human_inbatch_idx)
+        if torch.any(labels_for_h >= num_mouse_inbatch) or torch.any(
+            labels_for_m >= num_human_inbatch
+        ):
+            # This should never happen, but check just in case
+            continue
+
         # Cross-entropy loss: labels index into the in-batch portion of mouse_all/human_all
         # (memory bank samples are negatives, so they're at indices >= len(inbatch))
+        # InfoNCE: minimize -log(exp(sim_pos) / sum(exp(sim_all))) = -log(softmax_pos)
+        # This encourages high similarity between positive pairs and low similarity with negatives
         loss_h = F.cross_entropy(logits_h, labels_for_h)
         loss_m = F.cross_entropy(logits_m, labels_for_m)
 
