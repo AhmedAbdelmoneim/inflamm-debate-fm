@@ -116,18 +116,40 @@ def _load_and_prepare_data(
     logger.info(f"Combined human: {combined_adatas['human'].shape}")
     logger.info(f"Combined mouse: {combined_adatas['mouse'].shape}")
 
-    # Load multi-model embeddings if requested and not present
+    # Check for existing embeddings
+    existing_embeddings = {}
+    for species in combined_adatas:
+        existing_embeddings[species] = set(_detect_embedding_keys(combined_adatas[species]))
+        logger.info(
+            f"Found {len(existing_embeddings[species])} existing embeddings in {species}: {sorted(existing_embeddings[species])}"
+        )
+
+    # Only generate missing embeddings if requested
     if load_multi_model_embeddings:
         available_models = detect_available_models()
         if available_models:
-            logger.info(f"Loading multi-model embeddings from {len(available_models)} models...")
+            logger.info(
+                f"Checking for missing embeddings from {len(available_models)} available models..."
+            )
             for species in combined_adatas:
-                combined_adatas[species] = add_multi_model_embeddings_to_adata(
-                    combined_adatas[species],
-                    device=device,
-                    batch_size=batch_size,
-                    models=available_models,
-                )
+                # Check which embeddings are missing
+                expected_keys = {f"X_{model_name}" for model_name in available_models.keys()}
+                missing_keys = expected_keys - existing_embeddings[species]
+
+                if missing_keys:
+                    logger.info(
+                        f"Generating {len(missing_keys)} missing embeddings for {species}: {sorted(missing_keys)}"
+                    )
+                    combined_adatas[species] = add_multi_model_embeddings_to_adata(
+                        combined_adatas[species],
+                        device=device,
+                        batch_size=batch_size,
+                        models=available_models,
+                    )
+                else:
+                    logger.info(
+                        f"All embeddings already present in {species}, skipping generation"
+                    )
         else:
             logger.warning("No models found for multi-model embedding extraction")
 
