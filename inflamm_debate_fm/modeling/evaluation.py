@@ -401,11 +401,20 @@ def evaluate_cross_species(
     if bootstrap_end is None:
         bootstrap_end = n_bootstraps
 
+    # Validate bootstrap range
+    if bootstrap_start < 0:
+        raise ValueError(f"bootstrap_start must be >= 0, got {bootstrap_start}")
+    if bootstrap_end > n_bootstraps:
+        raise ValueError(
+            f"bootstrap_end ({bootstrap_end}) cannot exceed n_bootstraps ({n_bootstraps})"
+        )
+    if bootstrap_start >= bootstrap_end:
+        raise ValueError(
+            f"bootstrap_start ({bootstrap_start}) must be < bootstrap_end ({bootstrap_end})"
+        )
+
     bootstrap_range = range(bootstrap_start, bootstrap_end)
     actual_n_bootstraps = len(bootstrap_range)
-
-    if actual_n_bootstraps == 0:
-        raise ValueError(f"Invalid bootstrap range: start={bootstrap_start}, end={bootstrap_end}")
 
     tqdm.write(
         f"Running bootstraps {bootstrap_start} to {bootstrap_end - 1} (total: {actual_n_bootstraps})"

@@ -160,12 +160,18 @@ echo ""
 echo "Step 3: Generating combine script..."
 COMBINE_SCRIPT="combine_cross_species_results.sh"
 
+# Get absolute path to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJ_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 cat > "$COMBINE_SCRIPT" << EOF
 #!/bin/bash
 # Combine cross-species bootstrap results
 # Run this after all jobs complete
 
 set -e
+
+cd "$PROJ_ROOT"
 
 OUTPUT_DIR="data/probing_results/cross_species"
 COMBINED_OUTPUT="\$OUTPUT_DIR/cross_species_results_combined.pkl"
@@ -176,10 +182,14 @@ RESULT_FILES=(\$(ls \$OUTPUT_DIR/cross_species_results_bs_*.pkl 2>/dev/null | so
 if [ \${#RESULT_FILES[@]} -eq 0 ]; then
     echo "Error: No partial result files found in \$OUTPUT_DIR"
     echo "Make sure all jobs have completed successfully"
+    echo "Expected files: \$OUTPUT_DIR/cross_species_results_bs_*.pkl"
     exit 1
 fi
 
-echo "Found \${#RESULT_FILES[@]} result files to combine"
+echo "Found \${#RESULT_FILES[@]} result files to combine:"
+for f in "\${RESULT_FILES[@]}"; do
+    echo "  - \$(basename \$f)"
+done
 echo ""
 
 # Combine results

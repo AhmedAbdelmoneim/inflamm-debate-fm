@@ -104,14 +104,25 @@ def _load_and_prepare_data(
         name = f.stem
         adatas[name] = ad.read_h5ad(f)
 
-    logger.info(f"Found {len(adatas)} cleaned datasets")
+    if len(adatas) == 0:
+        raise ValueError(
+            f"No AnnData files found in {cleaned_data_dir}. Please run data preprocessing first."
+        )
+
+    logger.info(f"Found {len(adatas)} cleaned datasets: {list(adatas.keys())}")
 
     # Combine by species
     logger.info("Combining datasets by species...")
-    combined_adatas = {
-        "human": combine_adatas(adatas, "human"),
-        "mouse": combine_adatas(adatas, "mouse"),
-    }
+    try:
+        combined_adatas = {
+            "human": combine_adatas(adatas, "human"),
+            "mouse": combine_adatas(adatas, "mouse"),
+        }
+    except ValueError as e:
+        raise ValueError(
+            f"Failed to combine datasets by species: {e}. "
+            "Make sure you have both human and mouse datasets."
+        ) from e
 
     logger.info(f"Combined human: {combined_adatas['human'].shape}")
     logger.info(f"Combined mouse: {combined_adatas['mouse'].shape}")
@@ -253,7 +264,7 @@ def probe(
         if save_weights:
             weights_dir.mkdir(parents=True, exist_ok=True)
 
-        adata = combined_adatas[species.lower()]
+        adata = combined_adatas[species]
 
         # Get species-specific embedding keys
         species_embedding_keys = _detect_embedding_keys(adata)
@@ -344,18 +355,19 @@ def probe(
         )
     logger.success(f"Saved results to {results_path}")
 
-    # Save summary CSV
-    summary_path = cross_species_output_dir / "cross_species_summary.csv"
-    _save_summary_csv(all_results, summary_path)
-    logger.success(f"Saved summary to {summary_path}")
+    # Save summary CSV (only if not using parallelization, to avoid overwrites)
+    if bootstrap_start is None and bootstrap_end is None:
+        summary_path = cross_species_output_dir / "cross_species_summary.csv"
+        _save_summary_csv(all_results, summary_path)
+        logger.success(f"Saved summary to {summary_path}")
+    else:
+        logger.info(
+            "Skipping summary CSV for parallel job (will be generated after combining all results)"
+        )
 
     logger.info("\n" + "=" * 80)
     logger.success("All probing experiments completed!")
     logger.info("=" * 80)
-
-    if use_wandb and wandb_run:
-        wandb_run.finish()
-        logger.info("Wandb run completed")
 
     if use_wandb and wandb_run:
         wandb_run.finish()
@@ -425,7 +437,14 @@ def probe_within_species(
         batch_size=batch_size,
         embedding_types=embedding_types,
     )
-    adata = combined_adatas[species.lower()]
+
+    species_lower = species.lower()
+    if species_lower not in combined_adatas:
+        raise ValueError(
+            f"Species '{species}' not found in combined data. "
+            f"Available species: {list(combined_adatas.keys())}"
+        )
+    adata = combined_adatas[species_lower]
 
     # Get species-specific embedding keys
     species_embedding_keys = _detect_embedding_keys(adata)
