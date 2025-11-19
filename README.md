@@ -80,6 +80,11 @@ make analyze-coeffs
 # Run GSEA analysis
 make analyze-gsea
 
+# Fine-tune models with LoRA
+make finetune SPECIES=human
+make finetune SPECIES=mouse
+make finetune SPECIES=combined
+
 # Generate plots
 make plot-within SPECIES=human
 make plot-cross
@@ -99,9 +104,10 @@ make clean     # Remove compiled Python files
    - Single dataset: `make embed DATASET=<dataset_name>`
    - All configurations: `make embed-all DEVICE=cuda` (generates human-only, mouse-only, and human-ortholog-filtered embeddings)
 4. **Probing Experiments**: `make probe-within SPECIES=human` or `make probe-cross`
-5. **Coefficient Analysis**: `make analyze-coeffs`
-6. **GSEA Analysis**: `make analyze-gsea`
-7. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
+5. **Fine-tuning (LoRA)**: `make finetune SPECIES=human` (see Fine-tuning section below)
+6. **Coefficient Analysis**: `make analyze-coeffs`
+7. **GSEA Analysis**: `make analyze-gsea`
+8. **Visualization**: `make plot-within SPECIES=human` or `make plot-cross`
 
 ## Configuration
 
@@ -156,7 +162,73 @@ sbatch hpc/run_job.sh probe within-species --species human
 
 **Note:** The container includes PyTorch with CUDA 12.9 support. The host CUDA module is typically not required, but you can load a specific version using the `CUDA_VERSION` environment variable if needed.
 
+## Fine-tuning with LoRA
 
+Fine-tune BulkFormer models using LoRA (Low-Rank Adaptation) for inflammation classification. This uses a subset of the data (32+32 samples by default) and tracks which samples were used to exclude them from downstream evaluation.
+
+### Data Validation
+
+The fine-tuning process:
+- Uses 32 inflammation + 32 control samples by default (configurable)
+- Tracks which samples were used for fine-tuning
+- Saves metadata to exclude these samples from downstream evaluation
+- Reports the percentage of available data used
+
+### Training Models
+
+Fine-tune three models (one per species configuration):
+
+```bash
+# Train on human data only
+python -m inflamm_debate_fm.cli finetune train --species human
+
+# Train on mouse data only
+python -m inflamm_debate_fm.cli finetune train --species mouse
+
+# Train on combined human+mouse data
+python -m inflamm_debate_fm.cli finetune train --species combined
+```
+
+### Custom Training Options
+
+```bash
+# Custom sample sizes and training parameters
+python -m inflamm_debate_fm.cli finetune train \
+    --species human \
+    --n-inflammation 32 \
+    --n-control 32 \
+    --epochs 20 \
+    --batch-size 16 \
+    --lr 5e-5 \
+    --weight-decay 0.01 \
+    --use-wandb
+```
+
+### Output Structure
+
+Each fine-tuning run creates:
+- `checkpoint_best/`: Best checkpoint (lowest loss)
+- `checkpoint_final/`: Final checkpoint after all epochs
+- `finetuning_samples_{species}.csv`: CSV file listing which samples were used
+- `finetuning_summary_{species}.json`: Summary with percentage of data used
+
+### HPC Usage
+
+```bash
+# Submit fine-tuning job on HPC
+sbatch --gpus=h100:1 --time=12:00:00 --mem=32G \
+    hpc/run_job.sh finetune train --species human --use-wandb
+
+# Train all three models
+for species in human mouse combined; do
+    sbatch --gpus=h100:1 --time=12:00:00 --mem=32G \
+        hpc/run_job.sh finetune train --species $species --use-wandb
+done
+```
+
+### Using Fine-tuned Models
+
+Fine-tuned models can be loaded and used alongside the zero-shot model for probing experiments. The sample metadata files (`finetuning_samples_{species}.csv`) should be used to exclude fine-tuning samples from evaluation datasets.
 
 ## Additional Resources
 

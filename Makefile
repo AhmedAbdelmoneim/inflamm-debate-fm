@@ -135,6 +135,28 @@ probe-within: requirements
 probe-cross: requirements
 	$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli probe cross-species
 
+## Fine-tune model with LoRA
+.PHONY: finetune
+finetune: requirements
+	@echo "Usage: make finetune SPECIES=<human|mouse|combined> [EPOCHS=<10>] [BATCH_SIZE=<8>] [USE_WANDB=<true|false>]"
+	@if [ -z "$(SPECIES)" ]; then \
+		echo "Error: SPECIES variable is required"; \
+		echo "Example: make finetune SPECIES=human USE_WANDB=true"; \
+		exit 1; \
+	fi
+	@if [ "$(USE_WANDB)" = "true" ]; then \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli finetune train \
+			--species $(SPECIES) \
+			--epochs $(or $(EPOCHS),10) \
+			--batch-size $(or $(BATCH_SIZE),8) \
+			--use-wandb; \
+	else \
+		$(PYTHON_INTERPRETER) -m inflamm_debate_fm.cli finetune train \
+			--species $(SPECIES) \
+			--epochs $(or $(EPOCHS),10) \
+			--batch-size $(or $(BATCH_SIZE),8); \
+	fi
+
 ## Analyze coefficients
 .PHONY: analyze-coeffs
 analyze-coeffs: requirements
